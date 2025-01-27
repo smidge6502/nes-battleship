@@ -1,0 +1,5 @@
+{
+    "executable": "C:\\cc65\\bin\\cl65.exe",
+    "input": "battleship.asm",
+    "params": "-t nes -o battleship.nes"
+}
