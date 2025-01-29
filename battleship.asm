@@ -28,7 +28,7 @@ NUM_BUTTONS   = 8
 .byte $00, $00, $00, $00, $00 ; filler bytes
 
 .segment "ZEROPAGE" ; starts at $02!
-reservedForScratchWork: .res 14 ; reserve $00-$0F for general use
+.res 14 ; reserve $00-$0F for general use
 framestate: .res 1 ; Bit 7 = 1 means NMI has occurred and we can do game logic
 buttons1: .res 1
 buttons2: .res 1
@@ -96,43 +96,13 @@ ClearMem:
     STX sexy
 .endproc
 
-.proc LoadPalettes
-    LDX #$00
-:
-    LDA PaletteData, X
-    STA PPUDATA ; $3F00, $3F01, $3F02 => $3F1F
-    INX
-    CPX #$20
-    BNE :-
-.endproc
+    LDA #<PaletteData
+    LDX #>PaletteData
+    JSR LoadPalette
 
-.proc LoadWorld
-world = $00
     LDA #<WorldData
-    STA world
-    LDA #>WorldData
-    STA world+1
-
-    ; setup address in PPU for nametable data
-    BIT PPUSTATUS ; why?
-    LDA #$20
-    STA PPUADDR
-    LDA #$00
-    STA PPUADDR
-
-    ; Load 1024/$400 bytes 
-    LDX #$00 ; high byte
-    LDY #$00 ; low byte
-:
-    LDA (world), Y
-    STA PPUDATA
-    INY
-    BNE :-
-    INX
-    INC world+1
-    CPX #$04
-    BNE :-
-.endproc
+    LDX #>WorldData
+    JSR LoadNametable
 
 .proc LoadSprites
     LDX #$00
@@ -162,7 +132,6 @@ MainLoop:
     LDA #0
     STA framestate
 
-    ;JSR ReadJoypad1
     JSR ReadJoypads
     JSR UpdateButtonPressedSprites
 
@@ -217,29 +186,10 @@ LoopEnd:
     RTS
 .endproc
 
+.proc ReadJoypads
 ; Copied from https://www.nesdev.org/wiki/Controller_reading_code
 ; At the same time that we strobe bit 0, we initialize the ring counter
 ; so we're hitting two birds with one stone here
-.proc ReadJoypad1
-    lda #$01
-    ; While the strobe bit is set, buttons will be continuously reloaded.
-    ; This means that reading from JOYPAD1 will only return the state of the
-    ; first button: button A.
-    sta JOYPAD1
-    sta buttons1 ; set to 1 for bcc
-    lsr a        ; now A is 0
-    ; By storing 0 into JOYPAD1, the strobe bit is cleared and the reloading stops.
-    ; This allows all 8 buttons (newly reloaded) to be read from JOYPAD1.
-    sta JOYPAD1
-:
-    lda JOYPAD1
-    lsr a	       ; bit 0 -> Carry
-    rol buttons1  ; Carry -> bit 0; bit 7 -> Carry
-    bcc :-
-    rts
-.endproc
-
-.proc ReadJoypads
     lda #$01
     ; While the strobe bit is set, buttons will be continuously reloaded.
     ; This means that reading from JOYPAD1 will only return the state of the
@@ -302,6 +252,62 @@ LoopEnd:
 .endproc
 
 ;##############################################
+; GRAPHICS SUBROUTINES
+;##############################################
+
+.proc LoadNametable
+; DESCRIPTION: Load a nametable
+; PARAMETERS:
+;  * A - lo byte of data address
+;  * X - hi byte of data address
+sourceData = $00
+
+    STA sourceData
+    STX sourceData + 1
+
+    ; setup address in PPU for nametable data
+    BIT PPUSTATUS ; why?
+    LDA #$20
+    STA PPUADDR
+    LDA #$00
+    STA PPUADDR
+
+    ; Load 1024/$400 bytes 
+    LDX #$00 ; high byte
+    LDY #$00 ; low byte
+:
+    LDA (sourceData), Y
+    STA PPUDATA
+    INY
+    BNE :-
+    INX
+    INC sourceData + 1
+    CPX #$04
+    BNE :-
+    RTS
+.endproc
+
+.proc LoadPalette
+; DESCRIPTION: Load a nametable
+; PARAMETERS:
+;  * A - lo byte of data address
+;  * X - hi byte of data address
+sourceData = $00
+
+    STA sourceData
+    STX sourceData + 1
+
+    LDY #$00
+:
+    LDA (sourceData), Y
+    STA PPUDATA ; $3F00, $3F01, $3F02 => $3F1F
+    INY
+    CPY #$20
+    BNE :-
+    RTS
+.endproc
+
+;##############################################
 ; DATA
 ;##############################################
 
@@ -312,6 +318,12 @@ WorldData:
   ;.incbin "world.bin"
   ;.incbin "assets/controller_map_nametable.map"
   .incbin "assets/test.map"
+
+TitleMap:
+  .incbin "assets/title/title.map"
+TitlePalette:
+  .incbin "assets/title/title.pal" ; background
+  .incbin "assets/title/title.pal" ; sprites
 
 SpriteData:
   ; Attribute bits:
