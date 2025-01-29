@@ -84,46 +84,24 @@ ClearMem:
     STA OAMDMA
     NOP ; why is this here?
 
-    ; $3F00 - $3F1F (palette RAM)
-    LDA #$3F
-    STA PPUADDR
-    LDA #$00
-    STA PPUADDR
-
-    LDX #$55
-    STX hey
-    INX
-    STX sexy
-.endproc
-
-    LDA #<PaletteData
-    LDX #>PaletteData
+    LDA #<TitlePalette
+    LDX #>TitlePalette
     JSR LoadPalette
 
-    LDA #<WorldData
-    LDX #>WorldData
+    LDA #<TitleMap
+    LDX #>TitleMap
     JSR LoadNametable
-
-.proc LoadSprites
-    LDX #$00
-    LDY #$00    
-:
-    LDA SpriteData, X
-    STA $0200, X
-    INX
-    CPX #$20
-    BNE :-
-.endproc
 
 ; Enable interrupts
     CLI
 
-    LDA #%10011000 ; enable NMI, background = 2nd char table ($1000); sprites = $1000
+    LDA #%10001000 ; (7)enable NMI, (4)background = 2nd char table ($1000); (3)sprites = $1000
     STA PPUCTRL
     ; Enabling sprites and background for left-most 8 pixels
     ; Enable sprites and background
     LDA #%00011110
     STA PPUMASK
+.endproc
 
 MainLoop:
     ; Check if NMI has occurred
@@ -297,7 +275,12 @@ sourceData = $00
     STA sourceData
     STX sourceData + 1
 
-    LDY #$00
+    LDA #$3F    ; $3F00 - $3F1F (palette RAM)
+    STA PPUADDR
+    LDA #$00
+    STA PPUADDR
+
+    TAY
 :
     LDA (sourceData), Y
     STA PPUDATA ; $3F00, $3F01, $3F02 => $3F1F
@@ -310,14 +293,6 @@ sourceData = $00
 ;##############################################
 ; DATA
 ;##############################################
-
-PaletteData:
-  .incbin "assets/palette.pal"
-
-WorldData:
-  ;.incbin "world.bin"
-  ;.incbin "assets/controller_map_nametable.map"
-  .incbin "assets/test.map"
 
 TitleMap:
   .incbin "assets/title/title.map"
