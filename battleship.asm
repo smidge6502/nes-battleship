@@ -101,6 +101,32 @@ ClearMem:
     ; Enable sprites and background
     LDA #%00011110
     STA PPUMASK
+
+    JMP MainLoop
+.endproc
+
+.proc NMI
+    PHP ; does NMI do PHP for you?
+    PHA
+    TXA
+    PHA
+    TYA
+    PHA
+
+    LDA #>OAMBUFFER ; copy sprite data from $0200 => PPU memory for display
+    STA OAMDMA
+
+    ; Indicate that an NMI has occurred by setting bit 7 of framestate
+    LDA #%10000000
+    STA framestate
+
+    PLA
+    TAY
+    PLA
+    TAX
+    PLA
+    PLP
+    RTI
 .endproc
 
 MainLoop:
@@ -201,32 +227,6 @@ LoopEnd:
     rol buttons2  ; Carry -> bit 0; bit 7 -> Carry
     bcc :-
     rts
-.endproc
-
-.proc NMI
-    ; Push state to stack
-    PHP ; does NMI do PHP for you?
-    PHA
-    TXA
-    PHA
-    TYA
-    PHA
-
-    LDA #>OAMBUFFER ; copy sprite data from $0200 => PPU memory for display
-    STA OAMDMA
-
-    ; Indicate that an NMI has occurred by setting bit 7 of framestate
-    LDA #%10000000
-    STA framestate
-
-    ; Restore state from stack
-    PLA
-    TAY
-    PLA
-    TAX
-    PLA
-    PLP
-    RTI
 .endproc
 
 ;##############################################
