@@ -15,6 +15,10 @@ BUTTON_RIGHT  = 1 << 0
 
 NUM_BUTTONS   = 8
 
+; Game states
+GAMESTATE_TITLE = 0
+GAMESTATE_BOARD = 1
+
 .segment "HEADER"
 .byte "NES"
 .byte $1a
@@ -29,11 +33,13 @@ NUM_BUTTONS   = 8
 
 .segment "ZEROPAGE" ; starts at $02!
 .res 14 ; reserve $00-$0F for general use
-framestate: .res 1 ; Bit 7 = 1 means NMI has occurred and we can do game logic
+
+; Global variables - zero page
+frameState: .res 1 ; Bit 7 = 1 means NMI has occurred and we can do game logic
+gameState: .res 1
 buttons1: .res 1
 buttons2: .res 1
-hey: .res 1
-sexy: .res 1
+
 
 .segment "STARTUP"
 .proc Reset
@@ -84,6 +90,7 @@ ClearMem:
     STA OAMDMA
     NOP ; why is this here?
 
+; Init game state
     LDA #<TitlePalette
     LDX #>TitlePalette
     JSR LoadPalette
@@ -91,6 +98,9 @@ ClearMem:
     LDA #<TitleMap
     LDX #>TitleMap
     JSR LoadNametable
+
+    LDA #GAMESTATE_TITLE
+    STA gameState
 
 ; Enable interrupts
     CLI
@@ -116,9 +126,9 @@ ClearMem:
     LDA #>OAMBUFFER ; copy sprite data from $0200 => PPU memory for display
     STA OAMDMA
 
-    ; Indicate that an NMI has occurred by setting bit 7 of framestate
+    ; Indicate that an NMI has occurred by setting bit 7 of frameState
     LDA #%10000000
-    STA framestate
+    STA frameState
 
     PLA
     TAY
@@ -129,17 +139,26 @@ ClearMem:
     RTI
 .endproc
 
-MainLoop:
+.proc MainLoop:
     ; Check if NMI has occurred
-    BIT framestate
+    BIT frameState
     BPL MainLoop
     LDA #0
-    STA framestate
+    STA frameState
 
     JSR ReadJoypads
-    JSR UpdateButtonPressedSprites
+    ;JSR UpdateButtonPressedSprites
+
+
 
     JMP MainLoop
+.endproc
+
+.proc ProcessTitle
+.endproc
+
+.proc ProcessBoard
+.endproc
 
 
 .proc UpdateButtonPressedSprites
