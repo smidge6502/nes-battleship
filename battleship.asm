@@ -300,6 +300,12 @@ TitlePalette:
   .incbin "assets/title/title.pal" ; background
   .incbin "assets/title/title.pal" ; sprites
 
+BoardMap:
+  .incbin "assets/board/board.map"
+BoardPalette:
+  .incbin "assets/board/board.pal"
+
+
 SpriteData:
   ; Attribute bits:
   ;  * 7 = Flip vertically
