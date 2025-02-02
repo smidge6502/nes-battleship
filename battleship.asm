@@ -396,11 +396,11 @@ TitlePalette:
   .incbin "assets/title/title.pal" ; sprites
 
 BoardMap:
-  .incbin "assets/board/board.map"
-  ;.incbin "assets/board_large/board_large.map"
+  ;.incbin "assets/board/board.map"
+  .incbin "assets/board_large/board.map"
 BoardPalette:
-  .incbin "assets/board/board.pal"
-  ;.incbin "assets/board_large/board_large.pal"
+  ;.incbin "assets/board/board.pal"
+  .incbin "assets/board_large/board.pal"
 
 
 SpriteData:
