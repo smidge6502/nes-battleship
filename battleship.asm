@@ -19,6 +19,12 @@ NUM_BUTTONS   = 8
 GAMESTATE_TITLE = 0
 GAMESTATE_BOARD = 1
 
+NAMETABLE_TL = $2000 ; top-left
+NAMETABLE_TR = $2400 ; top-right
+NAMETABLE_BL = $2800 ; bottom-left
+NAMETABLE_BR = $2C00 ; bottom-right
+
+
 .segment "HEADER"
 .byte "NES"
 .byte $1a
@@ -35,10 +41,14 @@ GAMESTATE_BOARD = 1
 .res 14 ; reserve $00-$0F for general use
 
 ; Global variables - zero page
-frameState: .res 1 ; Bit 7 = 1 means NMI has occurred and we can do game logic
-gameState: .res 1
-buttons1: .res 1
-buttons2: .res 1
+frameState:     .res 1 ; Bit 7 = 1 means NMI has occurred and we can do game logic
+gameState:      .res 1
+nextGameState:  .res 1
+buttons1:       .res 1
+buttons2:       .res 1
+ppuScrollX:     .res 1
+ppuScrollY:     .res 1
+ppuControl:     .res 1
 
 
 .segment "STARTUP"
@@ -95,18 +105,33 @@ ClearMem:
     LDX #>TitlePalette
     JSR LoadPalette
 
+    ; Load title screen
     LDA #<TitleMap
     LDX #>TitleMap
+    LDY #>NAMETABLE_TL
+    JSR LoadNametable
+
+    ; Load game board in off-screen nametable
+    LDA #<BoardMap
+    LDX #>BoardMap
+    LDY #>NAMETABLE_BL
     JSR LoadNametable
 
     LDA #GAMESTATE_TITLE
     STA gameState
+    STA nextGameState
 
 ; Enable interrupts
     CLI
 
     LDA #%10001000 ; (7)enable NMI, (4)background = 2nd char table ($1000); (3)sprites = $1000
+    STA ppuControl
     STA PPUCTRL
+
+    LDA #0
+    STA ppuScrollX
+    STA ppuScrollY
+
     ; Enabling sprites and background for left-most 8 pixels
     ; Enable sprites and background
     LDA #%00011110
@@ -116,6 +141,7 @@ ClearMem:
 .endproc
 
 .proc NMI
+FRAMESTATE_NMI = %10000000
     PHP ; does NMI do PHP for you?
     PHA
     TXA
@@ -126,8 +152,17 @@ ClearMem:
     LDA #>OAMBUFFER ; copy sprite data from $0200 => PPU memory for display
     STA OAMDMA
 
+    ; Set scroll
+    LDA ppuControl
+    STA PPUCTRL
+    BIT PPUSTATUS ; clear w flag
+    LDA ppuScrollX
+    STA PPUSCROLL
+    LDA ppuScrollY
+    STA PPUSCROLL
+
     ; Indicate that an NMI has occurred by setting bit 7 of frameState
-    LDA #%10000000
+    LDA #FRAMESTATE_NMI
     STA frameState
 
     PLA
@@ -139,7 +174,7 @@ ClearMem:
     RTI
 .endproc
 
-.proc MainLoop:
+.proc MainLoop
     ; Check if NMI has occurred
     BIT frameState
     BPL MainLoop
@@ -147,18 +182,59 @@ ClearMem:
     STA frameState
 
     JSR ReadJoypads
-    ;JSR UpdateButtonPressedSprites
+    ;JSR UpdateButtonPressedSprites `
 
+    ; Check if game state is changing
+    LDA gameState
+    EOR nextGameState
+    TAY ; Y will be non-zero if the state changed
+    LDA nextGameState
+    STA gameState
 
+    ; Check game state
+    LDA gameState
+    CMP #GAMESTATE_TITLE
+    BNE :+
+    JMP ProcessTitle
+:
+    CMP #GAMESTATE_BOARD
+    BNE :+
+    JMP ProcessBoard
+:
 
     JMP MainLoop
 .endproc
 
 .proc ProcessTitle
+    ; Check if the start putton was pressed
+    LDA buttons1
+    AND #BUTTON_START
+    BEQ :+
+
+    LDA #GAMESTATE_BOARD
+    STA nextGameState
+
+:
+    JMP MainLoop
+.endproc
+
+.proc InitTitle
+    
 .endproc
 
 .proc ProcessBoard
+    ; Check if we need to initialize the board
+    TYA
+    BEQ :+
+    ; Switch to BL nametable
+    LDA ppuControl
+    AND #%11111100 ; clear nametable bits
+    ORA #%00000010 ; set nametable bits
+    STA ppuControl
+:
+    JMP MainLoop
 .endproc
+
 
 
 .proc UpdateButtonPressedSprites
@@ -257,15 +333,15 @@ LoopEnd:
 ; PARAMETERS:
 ;  * A - lo byte of data address
 ;  * X - hi byte of data address
+;  * Y - hi byte of nametable address to write to ($YY00)
 sourceData = $00
 
     STA sourceData
     STX sourceData + 1
 
     ; setup address in PPU for nametable data
-    BIT PPUSTATUS ; why?
-    LDA #$20
-    STA PPUADDR
+    BIT PPUSTATUS ; clear w flag
+    STY PPUADDR
     LDA #$00
     STA PPUADDR
 
@@ -321,8 +397,10 @@ TitlePalette:
 
 BoardMap:
   .incbin "assets/board/board.map"
+  ;.incbin "assets/board_large/board_large.map"
 BoardPalette:
   .incbin "assets/board/board.pal"
+  ;.incbin "assets/board_large/board_large.pal"
 
 
 SpriteData:
