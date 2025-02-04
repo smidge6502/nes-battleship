@@ -49,6 +49,7 @@ buttons2:       .res 1
 ppuScrollX:     .res 1
 ppuScrollY:     .res 1
 ppuControl:     .res 1
+currentPalette: .res 2
 
 
 .segment "STARTUP"
@@ -103,6 +104,8 @@ ClearMem:
 ; Init game state
     LDA #<TitlePalette
     LDX #>TitlePalette
+    STA currentPalette
+    STX currentPalette+1
     JSR LoadPalette
 
     ; Load title screen
@@ -151,6 +154,11 @@ FRAMESTATE_NMI = %10000000
 
     LDA #>OAMBUFFER ; copy sprite data from $0200 => PPU memory for display
     STA OAMDMA
+
+    ; Load palette
+    LDA currentPalette
+    LDX currentPalette+1
+    JSR LoadPalette
 
     ; Set scroll
     LDA ppuControl
@@ -226,11 +234,19 @@ FRAMESTATE_NMI = %10000000
     ; Check if we need to initialize the board
     TYA
     BEQ :+
+
+    ; Board init
     ; Switch to BL nametable
     LDA ppuControl
     AND #%11111100 ; clear nametable bits
     ORA #%00000010 ; set nametable bits
     STA ppuControl
+
+    ; Set palette
+    LDA #<BoardPalette
+    STA currentPalette
+    LDA #>BoardPalette
+    STA currentPalette+1
 :
     JMP MainLoop
 .endproc
