@@ -37,8 +37,8 @@ NAMETABLE_BR = $2C00 ; bottom-right
 .byte $00
 .byte $00, $00, $00, $00, $00 ; filler bytes
 
-.segment "ZEROPAGE" ; starts at $02!
-.res 14 ; reserve $00-$0F for general use
+.segment "ZEROPAGE"
+.res 16 ; reserve $00-$0F for general use
 
 ; Global variables - zero page
 ;------------------------------
@@ -49,7 +49,7 @@ FRAMESTATE_UPDATE_BOARD = 1 << 6 ; set if board nametable needs updating
 gameState:        .res 1
 nextGameState:    .res 1
 
-;.org $20
+; Controller state variables
 prevButtons1:     .res 1 ; buttons read the previous frame
 prevButtons2:     .res 1
 buttons1:         .res 1 ; buttons read this frame
@@ -57,25 +57,17 @@ buttons2:         .res 1
 heldButtons1:     .res 1
 heldButtons2:     .res 1
 pressedButtons1:  .res 1
+pressedButtons2:  .res 1
+releasedButtons1: .res 1
+releasedButtons2: .res 1
 
+; PPU variables
+ppuScrollX:       .res 1
+ppuScrollY:       .res 1
+ppuControl:       .res 1
+currentPalette:   .res 2
+nextTile:         .res 1 ; for testing updates to specific nametable tiles
 
-; pressedButtons2:  .res 1
-; releasedButtons1: .res 1
-; releasedButtons2: .res 1
-; ppuScrollX:       .res 1
-; ppuScrollY:       .res 1
-; ppuControl:       .res 1
-; currentPalette:   .res 2
-; nextTile:         .res 1 ; for testing updates to specific nametable tiles
-
-pressedButtons2  = $30
-releasedButtons1 = $31
-releasedButtons2 = $32
-ppuScrollX       = $33
-ppuScrollY       = $34
-ppuControl       = $35
-currentPalette   = $36 ; 2 bytes
-nextTile         = $38 ; for testing updates to specific nametable tiles
 
 .segment "STARTUP"
 .proc Reset
