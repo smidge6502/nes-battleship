@@ -41,16 +41,41 @@ NAMETABLE_BR = $2C00 ; bottom-right
 .res 14 ; reserve $00-$0F for general use
 
 ; Global variables - zero page
-frameState:     .res 1 ; Bit 7 = 1 means NMI has occurred and we can do game logic
-gameState:      .res 1
-nextGameState:  .res 1
-buttons1:       .res 1
-buttons2:       .res 1
-ppuScrollX:     .res 1
-ppuScrollY:     .res 1
-ppuControl:     .res 1
-currentPalette: .res 2
+;------------------------------
+frameState:     .res 1
+FRAMESTATE_NMI          = 1 << 7 ; 1 means NMI has occurred and we can do game logic
+FRAMESTATE_UPDATE_BOARD = 1 << 6 ; set if board nametable needs updating
 
+gameState:        .res 1
+nextGameState:    .res 1
+
+;.org $20
+prevButtons1:     .res 1 ; buttons read the previous frame
+prevButtons2:     .res 1
+buttons1:         .res 1 ; buttons read this frame
+buttons2:         .res 1
+heldButtons1:     .res 1
+heldButtons2:     .res 1
+pressedButtons1:  .res 1
+
+
+; pressedButtons2:  .res 1
+; releasedButtons1: .res 1
+; releasedButtons2: .res 1
+; ppuScrollX:       .res 1
+; ppuScrollY:       .res 1
+; ppuControl:       .res 1
+; currentPalette:   .res 2
+; nextTile:         .res 1 ; for testing updates to specific nametable tiles
+
+pressedButtons2  = $30
+releasedButtons1 = $31
+releasedButtons2 = $32
+ppuScrollX       = $33
+ppuScrollY       = $34
+ppuControl       = $35
+currentPalette   = $36 ; 2 bytes
+nextTile         = $38 ; for testing updates to specific nametable tiles
 
 .segment "STARTUP"
 .proc Reset
@@ -144,7 +169,6 @@ ClearMem:
 .endproc
 
 .proc NMI
-FRAMESTATE_NMI = %10000000
     PHP ; does NMI do PHP for you?
     PHA
     TXA
@@ -160,6 +184,17 @@ FRAMESTATE_NMI = %10000000
     LDX currentPalette+1
     JSR LoadPalette
 
+    ;JMP SetScroll
+    ; 103, 2903
+    BIT PPUSTATUS
+    LDA #$29
+    STA PPUADDR
+    LDA #$03
+    STA PPUADDR
+    LDA nextTile
+    STA PPUDATA
+
+SetScroll:
     ; Set scroll
     LDA ppuControl
     STA PPUCTRL
@@ -170,6 +205,7 @@ FRAMESTATE_NMI = %10000000
     STA PPUSCROLL
 
     ; Indicate that an NMI has occurred by setting bit 7 of frameState
+    ; Also clears other bits
     LDA #FRAMESTATE_NMI
     STA frameState
 
@@ -233,7 +269,7 @@ FRAMESTATE_NMI = %10000000
 .proc ProcessBoard
     ; Check if we need to initialize the board
     TYA
-    BEQ :+
+    BEQ InitEnd
 
     ; Board init
     ; Switch to BL nametable
@@ -247,7 +283,31 @@ FRAMESTATE_NMI = %10000000
     STA currentPalette
     LDA #>BoardPalette
     STA currentPalette+1
+
+    ; Init test tile
+    LDA #$41
+    STA nextTile
+InitEnd:
+
+CheckLeftRight:
+    LDA pressedButtons1
+    AND #BUTTON_RIGHT
+    BEQ :+
+    INC nextTile
+    JMP CheckLeftRight_SetUpdateBoardFlag
 :
+    LDA pressedButtons1
+    AND #BUTTON_LEFT
+    BEQ CheckLeftRight_End
+    DEC nextTile
+
+CheckLeftRight_SetUpdateBoardFlag:
+    LDA frameState
+    ORA #FRAMESTATE_UPDATE_BOARD
+    STA frameState
+
+CheckLeftRight_End:
+
     JMP MainLoop
 .endproc
 
@@ -302,9 +362,19 @@ LoopEnd:
 .endproc
 
 .proc ReadJoypads
+changed1 = $00
+changed2 = $01
 ; Copied from https://www.nesdev.org/wiki/Controller_reading_code
 ; At the same time that we strobe bit 0, we initialize the ring counter
 ; so we're hitting two birds with one stone here
+
+    ; I added the previous states
+    LDA buttons1
+    STA prevButtons1
+    LDA buttons2
+    STA prevButtons2
+
+
     lda #$01
     ; While the strobe bit is set, buttons will be continuously reloaded.
     ; This means that reading from JOYPAD1 will only return the state of the
@@ -337,6 +407,28 @@ LoopEnd:
     lsr a	       ; bit 0 -> Carry
     rol buttons2  ; Carry -> bit 0; bit 7 -> Carry
     bcc :-
+
+EvaluateStateChange:
+    ; Check held buttons (previous = current = 1)
+    LDA buttons1
+    AND prevButtons1
+    STA heldButtons1
+    LDA buttons2
+    AND prevButtons2
+    STA heldButtons2
+
+    ; TODO: controller 2
+    LDA buttons1
+    EOR prevButtons1
+    STA changed1
+    AND prevButtons1 ; released
+    STA releasedButtons1
+    LDA changed1
+    AND buttons1     ; pressed
+    STA pressedButtons1
+
+
+End:
     rts
 .endproc
 
@@ -386,6 +478,7 @@ sourceData = $00
     STA sourceData
     STX sourceData + 1
 
+    BIT PPUSTATUS
     LDA #$3F    ; $3F00 - $3F1F (palette RAM)
     STA PPUADDR
     LDA #$00
