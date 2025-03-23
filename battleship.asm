@@ -167,6 +167,7 @@ cpuBoard:              .res 100
 placedShipsX:          .res NUM_SHIPS
 placedShipsY:          .res NUM_SHIPS
 allShipsPlaced:        .res 1
+stringWriteCount:      .res 1
 
 .segment "STARTUP"
 .proc Reset
@@ -587,9 +588,10 @@ dTileNextQueue   = $06
 shipTilePtr      = $07 ; 2 bytes
 shipNumTiles     = $09
 
-X_MAX = $09
-Y_MAX = $09
-BOARD_WIDTH = $0A
+X_MAX                         = $09
+Y_MAX                         = $09
+BOARD_WIDTH                   = $0A
+ALL_SHIPS_PLACED_STRING_COUNT = 3
     ; Check if we need to initialize the screen
     TYA
     BEQ InitEnd
@@ -640,6 +642,8 @@ Init:
 
     LDA #0
     STA allShipsPlaced
+    LDA #ALL_SHIPS_PLACED_STRING_COUNT
+    STA stringWriteCount
 
     ; Clear the board
     LDX #BOARD_NUM_SQUARES - 1
@@ -670,6 +674,7 @@ InitEnd:
     JMP Init
 
 :
+    JSR WriteAllShipsPlacedText
     JMP EndProcessPlaceShips
 
 CheckJoypad:
@@ -710,7 +715,7 @@ CheckJoypad:
 @setAllShipsPlaced:
     LDA #1
     STA allShipsPlaced
-    JSR WriteAllShipsPlacedText
+    ;JSR WriteAllShipsPlacedText
     JMP DrawBoard
 
 @checkB:
@@ -1078,8 +1083,10 @@ strLen   = $02
 .endproc
 
 .proc WriteAllShipsPlacedText
-; DESCRIPTION: Overwrites the "PLACE YOUR {SHIP}" text with instructions on
-;              how the player can proceed.
+; DESCRIPTION: Writes text to display once the player has placed all ships.
+;              To avoid overwhelming the NMI handler, the text has been split
+;              into multiple strings. One string will be enqueued each time
+;              this is called until all strings have been written.
 ; ALTERS: A, X, Y
 ;------------------------------------------------------------------------------
     ; Save off $00-$02
@@ -1090,7 +1097,18 @@ strLen   = $02
     LDA $02
     PHA
 
+    LDA stringWriteCount
+    CMP #3
+    BEQ WriteAllShipsPlaced
+    CMP #2
+    BEQ WriteStartPlay
+    CMP #1
+    BEQ WriteSelectReset
+    ;DEC stringWriteCount
+    JMP End
+
     ; Set up arguments
+WriteAllShipsPlaced:
     LDA #<StringAllShipsPlaced
     STA $00
     LDA #>StringAllShipsPlaced
@@ -1100,6 +1118,33 @@ strLen   = $02
     LDY #>NAMETABLE_BL
     LDX #$48
     JSR EnqueueStringWrite
+    DEC stringWriteCount
+    JMP End
+    
+WriteStartPlay:
+    LDA #<StringStartPlay
+    STA $00
+    LDA #>StringStartPlay
+    STA $01
+    LDA #12
+    STA $02
+    LDY #>NAMETABLE_BL
+    LDX #$83
+    JSR EnqueueStringWrite
+    DEC stringWriteCount
+    JMP End
+
+WriteSelectReset:
+    LDA #<StringSelectReset
+    STA $00
+    LDA #>StringSelectReset
+    STA $01
+    LDA #14
+    STA $02
+    LDY #>NAMETABLE_BL
+    LDX #$91
+    JSR EnqueueStringWrite
+    DEC stringWriteCount
 
 End:
     ; Restore $00-$02
@@ -1994,8 +2039,10 @@ StringBattleship: .asciiz "BATTLESHIP"
 StringCarrier:    .asciiz "CARRIER"
 
 ; Other strings
-StringEmpty:      .asciiz ""
-StringAllShipsPlaced: .asciiz "ALL SHIPS PLACED"
+StringEmpty:                      .asciiz ""
+StringAllShipsPlaced:             .asciiz "ALL SHIPS PLACED"
+StringStartPlay:                  .asciiz "START: PLAY"
+StringSelectReset:                .asciiz "SELECT: RESET"
 
 
 ShipTilesHorizontalHi:
