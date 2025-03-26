@@ -1657,6 +1657,8 @@ Init:
     STX currentPalette + 1
     JSR LoadPalette
 
+    JSR DrawEmptyMiniMap
+
     ; Enable rendering and NMI
     LDA #%00011110
     STA PPUMASK
@@ -1667,10 +1669,162 @@ Init:
 
     JMP End ; skip button checks
 InitEnd:
-    NOP
+    JSR DrawMiniMapOverlay
 
 End:
     JMP MainLoop
+.endproc
+
+.proc DrawEmptyMiniMap
+; DESCRIPTION: Draw the mini map, used to see the secondary grid, to the
+;              nametable. The mini map is drawn with no ships placed.
+;------------------------------------------------------------------------------
+TILES_PER_ROW = 6
+NUM_ROWS      = 6
+START_OFFSET  = $58
+DELTA_OFFSET  = $20
+
+    BIT PPUSTATUS
+
+    LDA #START_OFFSET
+    PHA
+
+    LDY #0 ; Y = row counter
+@rowLoop:
+    LDA #>NAMETABLE_BL
+    STA PPUADDR
+    PLA
+    STA PPUADDR
+    CLC
+    ADC #DELTA_OFFSET
+    PHA
+
+    LDX #0 ; X = tile on row counter
+@tileLoop:
+    CPY #0
+    BNE :+
+    ; Top row
+    LDA MiniMapTopRow,X
+    JMP @tileLoop_iterate
+
+:
+    ; Everything but the top row
+    LDA MiniMapGridRow,X
+
+@tileLoop_iterate:
+    STA PPUDATA
+    INX
+    CPX #TILES_PER_ROW
+    BCC @tileLoop ; branch if X < TILES_PER_ROW
+
+    INY
+    CPY #NUM_ROWS
+    BCC @rowLoop
+
+End:
+    PLA
+    RTS
+
+T = $A0 ; top edge tile
+E = $00 ; empty tile
+G = $C0 ; grid tile
+R = $CC ; right edge tile
+MiniMapTopRow:  .byte T, T, T, T, T, E
+MiniMapGridRow: .byte G, G, G, G, G, R
+.endproc
+
+.proc DrawMiniMapOverlay
+; DESCRIPTION: Draw ships, hits, and misses to the mini map.
+;              The mini map is arranged as ten rows of five sprites (50 sprites
+;              total). Each sprite covers two horizontally adjacent squares.
+;              Each square has four visual states:
+;                0 = no ship, no missile (empty)
+;                1 = no ship, missile    (miss)
+;                2 = ship, no missile    (ship if player's board; empty if cpu)
+;                3 - ship, missile       (hit)
+;
+;              Tile addresses $00-$0F represent the 16 possibile states of two
+;              squares: d3 d2 for the left square, d1 d0 for the right.
+;              Bits d7 and d6 of bytes in the board arrays have the correct
+;              value to use for the mini map board square sprite tiles.
+; ALTERS: A, X, Y
+;------------------------------------------------------------------------------
+spriteTile     = $00
+spriteX        = $01
+spriteY        = $02
+bufferIndex    = $03
+columnCount    = $04
+
+SPRITE_ATTRIBUTES  = %00000010 ; no flipping, normal priority, palette 2
+BUFFER_START_INDEX = $10
+NUM_COLUMNS        = 5
+START_X            = 192
+START_Y            = 19
+
+    LDA #START_Y
+    STA spriteY
+    LDX #BUFFER_START_INDEX
+    STX bufferIndex
+    LDY #0
+BoardSquareLoop:
+    LDA #NUM_COLUMNS
+    STA columnCount
+    LDA #START_X
+    STA spriteX
+
+@columnLoop:
+    CLC
+    LDA #0
+    STA spriteTile
+
+    LDA playerBoard,Y
+    ROL                         ; move "has ship" bit to carry
+    ROL spriteTile
+    ROL                         ; move "has missile" bit to carry
+    ROL spriteTile
+    INY                         ; repeat for the right square
+
+    LDA playerBoard,Y
+    ROL
+    ROL spriteTile
+    ROL
+    ROL spriteTile
+    INY
+
+    ; Write to OAMBUFFER
+    LDX bufferIndex
+    LDA spriteY
+    STA OAMBUFFER,X
+    INX
+    LDA spriteTile
+    STA OAMBUFFER,X
+    INX
+    LDA #SPRITE_ATTRIBUTES
+    STA OAMBUFFER,X
+    INX
+    LDA spriteX
+    STA OAMBUFFER,X
+    CLC               ; iterate sprite X position
+    ADC #8
+    STA spriteX
+    INX
+    STX bufferIndex
+
+    ; Repeat for next square pair in row
+    DEC columnCount
+    BNE @columnLoop
+
+@iterate:
+    CLC               ; iterate sprite Y position
+    LDA spriteY
+    ADC #4
+    STA spriteY
+
+    CPY #BOARD_NUM_SQUARES
+    BCC BoardSquareLoop
+
+End:
+    RTS
 .endproc
 
 ; .proc UpdateButtonPressedSprites
