@@ -1657,6 +1657,8 @@ Init:
     STX currentPalette + 1
     JSR LoadPalette
 
+    JSR DrawEmptyMiniMap
+
     ; Enable rendering and NMI
     LDA #%00011110
     STA PPUMASK
@@ -1671,6 +1673,64 @@ InitEnd:
 
 End:
     JMP MainLoop
+.endproc
+
+.proc DrawEmptyMiniMap
+; DESCRIPTION: Draw the mini map, used to see the secondary grid, to the
+;              nametable. The mini map is drawn with no ships placed.
+;------------------------------------------------------------------------------
+TILES_PER_ROW = 6
+NUM_ROWS      = 6
+START_OFFSET  = $58
+DELTA_OFFSET  = $20
+
+    BIT PPUSTATUS
+
+    LDA #START_OFFSET
+    PHA
+
+    LDY #0 ; Y = row counter
+@rowLoop:
+    LDA #>NAMETABLE_BL
+    STA PPUADDR
+    PLA
+    STA PPUADDR
+    CLC
+    ADC #DELTA_OFFSET
+    PHA
+
+    LDX #0 ; X = tile on row counter
+@tileLoop:
+    CPY #0
+    BNE :+
+    ; Top row
+    LDA MiniMapTopRow,X
+    JMP @tileLoop_iterate
+
+:
+    ; Everything but the top row
+    LDA MiniMapGridRow,X
+
+@tileLoop_iterate:
+    STA PPUDATA
+    INX
+    CPX #TILES_PER_ROW
+    BCC @tileLoop ; branch if X < TILES_PER_ROW
+
+    INY
+    CPY #NUM_ROWS
+    BCC @rowLoop
+
+End:
+    PLA
+    RTS
+
+T = $A0 ; top edge tile
+E = $00 ; empty tile
+G = $C0 ; grid tile
+R = $CC ; right edge tile
+MiniMapTopRow:  .byte T, T, T, T, T, E
+MiniMapGridRow: .byte G, G, G, G, G, R
 .endproc
 
 ; .proc UpdateButtonPressedSprites
