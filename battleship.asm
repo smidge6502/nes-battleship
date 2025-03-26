@@ -1602,47 +1602,6 @@ MarkShipAsPlaced:
 .endproc
 
 .proc ProcessBoard
-    ; Check if we need to initialize the board
-    TYA
-    BEQ InitEnd
-
-    ; Board init
-    ; Switch to BL nametable
-    LDA ppuControl
-    AND #%11111100 ; clear nametable bits
-    ORA #%00000010 ; set nametable bits
-    STA ppuControl
-
-    ; Set palette
-    LDA #<BoardPalette
-    STA currentPalette
-    LDA #>BoardPalette
-    STA currentPalette+1
-    JSR SetNmiFlagLoadPalette
-
-    ; Init test tile
-    LDA #$41
-    STA nextTile
-InitEnd:
-
-CheckLeftRight:
-    LDA pressedButtons1
-    AND #BUTTON_RIGHT
-    BEQ :+
-    INC nextTile
-    JMP CheckLeftRight_SetUpdateBoardFlag
-:
-    LDA pressedButtons1
-    AND #BUTTON_LEFT
-    BEQ CheckLeftRight_End
-    DEC nextTile
-
-CheckLeftRight_SetUpdateBoardFlag:
-    LDA frameState
-    ORA #FRAMESTATE_UPDATE_BOARD
-    STA frameState
-
-CheckLeftRight_End:
 
     JMP MainLoop
 .endproc
@@ -2189,13 +2148,6 @@ TitlePalette:
   .incbin "assets/title/title.pal" ; background
   .incbin "assets/title/title.pal" ; sprites
 
-BoardMap:
-  ;.incbin "assets/board/board.map"
-  .incbin "assets/board_large/board.map"
-BoardPalette:
-  ;.incbin "assets/board/board.pal"
-  .incbin "assets/board_large/board.pal"
-
 PlaceShipsMap:
   .incbin "assets/place_ships/place_ships.map"
 PlaceShipsPalette:
@@ -2235,5 +2187,4 @@ SpriteData:
     .word hey
     ; 
 .segment "CHARS"
-    ; .incbin "hellomario.chr"
     .incbin "assets/tiles.chr"
