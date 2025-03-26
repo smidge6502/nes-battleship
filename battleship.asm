@@ -622,6 +622,17 @@ Init:
     ;JSR SetNmiFlagLoadPalette
     JSR LoadPalette
 
+    ; Write "PLACE YOUR" text
+    LDA #<StringPlaceYour
+    STA $00
+    LDA #>StringPlaceYour
+    STA $01
+    LDA #11
+    STA $02
+    LDY #>NAMETABLE_BL
+    LDX #$48
+    JSR EnqueueStringWrite
+
     ; Initialize cursor to A-1
     LDA #0
     STA cursorX
@@ -1998,10 +2009,11 @@ StringBattleship: .asciiz "BATTLESHIP"
 StringCarrier:    .asciiz "CARRIER"
 
 ; Other strings
-StringEmpty:                      .asciiz ""
-StringAllShipsPlaced:             .asciiz "ALL SHIPS PLACED"
-StringStartPlay:                  .asciiz "START: PLAY"
-StringSelectReset:                .asciiz "SELECT: RESET"
+StringEmpty:          .asciiz ""
+StringPlaceYour:      .asciiz "PLACE YOUR"
+StringAllShipsPlaced: .asciiz "ALL SHIPS PLACED"
+StringStartPlay:      .asciiz "START: PLAY"
+StringSelectReset:    .asciiz "SELECT: RESET"
 
 
 ShipTilesHorizontalHi:
