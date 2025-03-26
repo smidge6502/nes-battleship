@@ -536,7 +536,6 @@ End:
     JSR ReadJoypads
     LDA #$40
     STA APU_FRAME_COUNTER
-    ;JSR UpdateButtonPressedSprites `
 
     ; Check if game state is changing
     LDA gameState
@@ -557,13 +556,15 @@ End:
 :
     CMP #GAMESTATE_BOARD
     BNE :+
-    JMP ProcessBoard
+    JMP ProcessPlayBoard
 :
 
     JMP MainLoop
 .endproc
 
 .proc ProcessTitle
+; DESCRIPTION: Main routine for the title screen.
+;------------------------------------------------------------------------------
     ; Check if the start putton was pressed
     LDA buttons1
     AND #BUTTON_START
@@ -577,6 +578,8 @@ End:
 .endproc
 
 .proc ProcessPlaceShips
+; DESCRIPTION: Main routine for the screen where the player places their ships.
+;------------------------------------------------------------------------------
 iShipSquare    = $00
 dBoardArray    = $01
 
@@ -621,6 +624,17 @@ Init:
     STX currentPalette+1
     ;JSR SetNmiFlagLoadPalette
     JSR LoadPalette
+
+    ; Write "PLACE YOUR" text
+    LDA #<StringPlaceYour
+    STA $00
+    LDA #>StringPlaceYour
+    STA $01
+    LDA #11
+    STA $02
+    LDY #>NAMETABLE_BL
+    LDX #$48
+    JSR EnqueueStringWrite
 
     ; Initialize cursor to A-1
     LDA #0
@@ -672,6 +686,16 @@ InitEnd:
     AND #BUTTON_SELECT
     BEQ :+
     JMP Init
+
+:
+    ; Advance to playing the game if start is pressed
+    LDA pressedButtons1
+    AND #BUTTON_START
+    BEQ :+
+
+    LDA #GAMESTATE_BOARD
+    STA nextGameState
+    JMP MainLoop
 
 :
     JSR WriteAllShipsPlacedText
@@ -1601,58 +1625,101 @@ MarkShipAsPlaced:
 
 .endproc
 
-.proc ProcessBoard
+.proc ProcessPlayBoard
+; DESCRIPTION: Main routine for the play board.
+;------------------------------------------------------------------------------
+    ; Check if we need to initialize the screen
+    TYA
+    BEQ InitEnd
 
+Init:
+    ; Disable rendering and NMI
+    LDA #0
+    STA PPUMASK
+
+    ; Switch to BL nametable
+    LDA ppuControl
+    AND #%01111100 ; clear nametable and NMI bits
+    ORA #%00000010 ; set nametable bits
+    STA ppuControl
+    STA PPUCTRL
+
+    ; Load nametable
+    LDA #<PlaceShipsMap
+    LDX #>PlaceShipsMap
+    LDY #>NAMETABLE_BL
+    JSR LoadNametable
+
+    ; Load palette
+    LDA #<PlaceShipsPalette
+    STA currentPalette
+    LDX #>PlaceShipsPalette
+    STX currentPalette + 1
+    JSR LoadPalette
+
+    ; Enable rendering and NMI
+    LDA #%00011110
+    STA PPUMASK
+    LDA ppuControl
+    ORA #%10000000 ; set NMI bit
+    STA ppuControl
+    STA PPUCTRL
+
+    JMP End ; skip button checks
+InitEnd:
+    NOP
+
+End:
     JMP MainLoop
 .endproc
 
-.proc UpdateButtonPressedSprites
-; DESCRIPTION: Updates the OAM buffer with the sprites for pressed buttons
-;              in the controller test.
-; ALTERS: A, X, Y, $00
-BUTTON_SPRITE_BYTES = NUM_BUTTONS << 2 ; 4 bytes per button
-buttonState = $E0
-    LDA buttons1
-    LDX #0 ; X = OAM buffer byte being written
-    LDY #NUM_BUTTONS ; Y = buttons remaining
-    LDA buttons1
-    STA buttonState ; copy button input
+; .proc UpdateButtonPressedSprites
+; ; DESCRIPTION: Updates the OAM buffer with the sprites for pressed buttons
+; ;              in the controller test.
+; ; ALTERS: A, X, Y, $00
+; BUTTON_SPRITE_BYTES = NUM_BUTTONS << 2 ; 4 bytes per button
+; buttonState = $E0
+;     LDA buttons1
+;     LDX #0 ; X = OAM buffer byte being written
+;     LDY #NUM_BUTTONS ; Y = buttons remaining
+;     LDA buttons1
+;     STA buttonState ; copy button input
 
-Loop:
-    ROR buttonState
-    BCC :+ 
-    ; If the button is pressed, copy its sprite's data to the buffer.
-    LDA SpriteData,X
-    STA OAMBUFFER,X
-    INX
-    LDA SpriteData,X
-    STA OAMBUFFER,X
-    INX
-    LDA SpriteData,X
-    STA OAMBUFFER,X
-    INX
-    LDA SpriteData,X
-    STA OAMBUFFER,X
-    INX
-    JMP LoopEnd
-:
-    ; If not pressed, copy in $FF for the sprite.
-    LDA #$FF
-    STA OAMBUFFER,X
-    INX
-    STA OAMBUFFER,X
-    INX
-    STA OAMBUFFER,X
-    INX
-    STA OAMBUFFER,X
-    INX
-LoopEnd:
-    DEY
-    BEQ :+
-    JMP Loop
-:
-    RTS
-.endproc
+; Loop:
+;     ROR buttonState
+;     BCC :+ 
+;     ; If the button is pressed, copy its sprite's data to the buffer.
+;     LDA SpriteData,X
+;     STA OAMBUFFER,X
+;     INX
+;     LDA SpriteData,X
+;     STA OAMBUFFER,X
+;     INX
+;     LDA SpriteData,X
+;     STA OAMBUFFER,X
+;     INX
+;     LDA SpriteData,X
+;     STA OAMBUFFER,X
+;     INX
+;     JMP LoopEnd
+; :
+;     ; If not pressed, copy in $FF for the sprite.
+;     LDA #$FF
+;     STA OAMBUFFER,X
+;     INX
+;     STA OAMBUFFER,X
+;     INX
+;     STA OAMBUFFER,X
+;     INX
+;     STA OAMBUFFER,X
+;     INX
+; LoopEnd:
+;     DEY
+;     BEQ :+
+;     JMP Loop
+; :
+;     RTS
+; .endproc
 
 
 ;##############################################
@@ -1998,10 +2065,11 @@ StringBattleship: .asciiz "BATTLESHIP"
 StringCarrier:    .asciiz "CARRIER"
 
 ; Other strings
-StringEmpty:                      .asciiz ""
-StringAllShipsPlaced:             .asciiz "ALL SHIPS PLACED"
-StringStartPlay:                  .asciiz "START: PLAY"
-StringSelectReset:                .asciiz "SELECT: RESET"
+StringEmpty:          .asciiz ""
+StringPlaceYour:      .asciiz "PLACE YOUR"
+StringAllShipsPlaced: .asciiz "ALL SHIPS PLACED"
+StringStartPlay:      .asciiz "START: PLAY"
+StringSelectReset:    .asciiz "SELECT: RESET"
 
 
 ShipTilesHorizontalHi:
