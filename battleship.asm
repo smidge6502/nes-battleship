@@ -53,7 +53,9 @@ BOARD_OFFSET_X   = $02
 BOARD_OFFSET_Y   = $08
 
 BOARD_SQUARES_PER_LINE = 10
-BOARD_NUM_SQUARES      = 100
+BOARD_NUM_ROWS         = 10
+BOARD_NUM_COLS         = 10
+BOARD_NUM_SQUARES      = BOARD_NUM_ROWS * BOARD_NUM_COLS
 
 CURSOR_BLINK_CHECK_MASK = %00010000 ; show cursor if this AND globalTimer = 0
 
@@ -1667,9 +1669,71 @@ Init:
     STA ppuControl
     STA PPUCTRL
 
+    LDA #0
+    STA cursorX
+    STA cursorY
+    STA newCursorX
+    STA newCursorY
+
     JMP End ; skip button checks
 InitEnd:
+
     JSR DrawMiniMapOverlay
+
+CheckJoypad:
+    LDX cursorX
+    STX newCursorX
+    LDY cursorY
+    STY newCursorY
+
+@checkRight:
+    LDA pressedButtons1
+    AND #BUTTON_RIGHT
+    BEQ @checkLeft
+    INX
+    CPX #BOARD_NUM_COLS
+    BCC :+
+    LDX #0  ; wrap back to left side
+:
+    STX cursorX
+    JMP @checkDown
+
+@checkLeft:
+    LDA pressedButtons1
+    AND #BUTTON_LEFT
+    BEQ @checkDown
+    DEX
+    BPL :+
+    LDX #BOARD_NUM_COLS - 1 ; wrap back to right side
+:
+    STX cursorX
+
+@checkDown:
+    LDA pressedButtons1
+    AND #BUTTON_DOWN
+    BEQ @checkUp
+    INY
+    CPY #BOARD_NUM_ROWS
+    BCC :+
+    LDY #0  ; wrap back to top row
+:
+    STY cursorY
+    JMP DrawCursor
+
+@checkUp:
+    LDA pressedButtons1
+    AND #BUTTON_UP
+    BEQ DrawCursor
+    DEY
+    BPL :+
+    LDY #BOARD_NUM_ROWS - 1 ; wrap back to bottom row
+:
+    STY cursorY
+
+DrawCursor:
+    LDX cursorX
+    LDY cursorY
+    JSR DrawPlayBoardFireCursor
 
 End:
     JMP MainLoop
@@ -1825,6 +1889,108 @@ BoardSquareLoop:
 
 End:
     RTS
+.endproc
+
+.proc DrawPlayBoardFireCursor
+; DESCRIPTION: Draws the cursor the player moves on the play board to fire upon
+;              enemy ships.
+; PARAMETERS:
+;  * X - X coordinate
+;  * Y - Y coordinate
+; ALTERS: A, X, Y
+;------------------------------------------------------------------------------
+spriteX = $00
+spriteY = $01
+
+BUFFER_START_INDEX = $00
+SPRITE_TILE        = $10
+ATTRIBUTES         = $01  ; palette 1
+TILE_WIDTH         = $08
+
+    LDA StartPixelX,X
+    STA spriteX
+    LDA StartPixelY,Y
+    STA spriteY
+    
+    LDX #BUFFER_START_INDEX
+    
+    ; Upper-left sprite
+    LDA spriteY
+    STA OAMBUFFER,X
+    INX
+    LDA #SPRITE_TILE
+    STA OAMBUFFER,X
+    INX
+    LDA #ATTRIBUTES
+    STA OAMBUFFER,X
+    INX
+    LDA spriteX
+    STA OAMBUFFER,X
+    INX
+    
+    ; Upper-right sprite
+    LDA spriteY
+    STA OAMBUFFER,X
+    INX
+    LDA #SPRITE_TILE
+    STA OAMBUFFER,X
+    INX
+    LDA #ATTRIBUTES
+    ORA #%01000000     ; flip horizontally
+    STA OAMBUFFER,X
+    INX
+    LDA spriteX
+    CLC
+    ADC #TILE_WIDTH + 1  ; +1 accounts for the tile not being centered
+    STA OAMBUFFER,X
+    INX
+    
+    ; Bottom-left sprite
+    LDA spriteY
+    CLC
+    ADC #TILE_WIDTH - 1
+    STA OAMBUFFER,X
+    INX
+    LDA #SPRITE_TILE
+    STA OAMBUFFER,X
+    INX
+    LDA #ATTRIBUTES
+    ORA #%10000000     ; flip vertically
+    STA OAMBUFFER,X
+    INX
+    LDA spriteX
+    STA OAMBUFFER,X
+    INX
+
+    ; Bottom-right sprite
+    LDA spriteY
+    CLC
+    ADC #TILE_WIDTH - 1
+    STA OAMBUFFER,X
+    INX
+    LDA #SPRITE_TILE
+    STA OAMBUFFER,X
+    INX
+    LDA #ATTRIBUTES
+    ORA #%11000000     ; flip vertically and horizontally
+    STA OAMBUFFER,X
+    INX
+    LDA spriteX
+    CLC
+    ADC #TILE_WIDTH + 1
+    STA OAMBUFFER,X
+
+End:
+    RTS
+
+X0 = 16
+Y0 = 63
+StartPixelX:
+  .byte X0, X0 + 16, X0 + 2*16, X0 + 3*16, X0 + 4*16
+  .byte X0 + 5*16, X0 + 6*16, X0 + 7*16, X0 + 8*16, X0 + 9*16
+StartPixelY:
+  .byte Y0, Y0 + 16, Y0 + 2*16, Y0 + 3*16, Y0 + 4*16
+  .byte Y0 + 5*16, Y0 + 6*16, Y0 + 7*16, Y0 + 8*16, Y0 + 9*16
 .endproc
 
 ; .proc UpdateButtonPressedSprites
