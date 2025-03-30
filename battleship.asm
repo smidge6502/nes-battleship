@@ -34,7 +34,10 @@ SHIP_STERN_HORIZ_TILE = $EC
 SHIP_BOW_VERT_TILE    = $AE
 SHIP_MID_VERT_TILE    = $CE
 SHIP_STERN_VERT_TILE  = $EE
+
 EMPTY_SQUARE_TILE     = $CC
+HIT_SQUARE_TILE       = $C8
+MISS_SQUARE_TILE      = $CA
 
 ; Ship types
 NUM_SHIPS        = $05
@@ -170,6 +173,10 @@ placedShipsX:          .res NUM_SHIPS
 placedShipsY:          .res NUM_SHIPS
 allShipsPlaced:        .res 1
 stringWriteCount:      .res 1
+
+isMainBoardPlayer:     .res 1 ; d7 = 1 means the large board on the play screen
+                              ; is showing the player's board. 0 shows the
+                              ; CPU's board. 
 
 .segment "STARTUP"
 .proc Reset
@@ -1674,6 +1681,7 @@ Init:
     STA cursorY
     STA newCursorX
     STA newCursorY
+    STA isMainBoardPlayer
 
     JMP End ; skip button checks
 InitEnd:
@@ -1685,6 +1693,23 @@ CheckJoypad:
     STX newCursorX
     LDY cursorY
     STY newCursorY
+
+@checkSelect:
+    LDA pressedButtons1
+    AND #BUTTON_SELECT
+    BEQ @checkDirections
+
+    LDA isMainBoardPlayer
+    EOR #%10000000
+    STA isMainBoardPlayer
+    JSR DrawPlayBoardObjects
+
+@checkDirections:
+    ; Do not move or draw the cursor if the main board is displaying the
+    ; player's board.
+    BIT isMainBoardPlayer
+    BPL @checkRight
+    JMP DrawCursor
 
 @checkRight:
     LDA pressedButtons1
@@ -1818,6 +1843,7 @@ spriteX        = $01
 spriteY        = $02
 bufferIndex    = $03
 columnCount    = $04
+boardPtr       = $05 ; 2 bytes
 
 SPRITE_ATTRIBUTES  = %00000010 ; no flipping, normal priority, palette 2
 BUFFER_START_INDEX = $10
@@ -1830,6 +1856,22 @@ START_Y            = 19
     LDX #BUFFER_START_INDEX
     STX bufferIndex
     LDY #0
+
+    BIT isMainBoardPlayer
+    BMI :+
+    ; mini map is the player's board
+    LDA #<playerBoard
+    STA boardPtr
+    LDA #>playerBoard
+    STA boardPtr + 1
+    JMP BoardSquareLoop
+:
+    ; mini map is the CPU's board
+    LDA #<cpuBoard
+    STA boardPtr
+    LDA #>cpuBoard
+    STA boardPtr + 1
+
 BoardSquareLoop:
     LDA #NUM_COLUMNS
     STA columnCount
@@ -1841,14 +1883,14 @@ BoardSquareLoop:
     LDA #0
     STA spriteTile
 
-    LDA playerBoard,Y
+    LDA (boardPtr),Y
     ROL                         ; move "has ship" bit to carry
     ROL spriteTile
     ROL                         ; move "has missile" bit to carry
     ROL spriteTile
     INY                         ; repeat for the right square
 
-    LDA playerBoard,Y
+    LDA (boardPtr),Y
     ROL
     ROL spriteTile
     ROL
@@ -1891,9 +1933,337 @@ End:
     RTS
 .endproc
 
+.proc DrawPlayBoardObjects
+; DESCRIPTION: Draws hits, misses, and ships on the main board grid.
+; ALTERS: A, X, Y
+;------------------------------------------------------------------------------
+currentRowStart    = $00
+nextRowStart       = $01
+nametablePtrLo     = $02
+nametablePtrHi     = $03
+isBottomRow        = $04 ; set d7 = 1 if on the bottom half of a row of squares
+remainingTileRows  = $05
+remainingTileCols  = $06
+boardPtr           = $07 ; 2 bytes
+attributes         = $09 ; 6 bytes
+
+BOARD_NAMETABLE_OFFSET = $102
+BOARD_ATTRIBUTE_OFFSET = $3D0
+EMPTY_TILE_UL = EMPTY_SQUARE_TILE
+EMPTY_TILE_UR = EMPTY_SQUARE_TILE + 1
+EMPTY_TILE_BL = EMPTY_SQUARE_TILE + $10
+EMPTY_TILE_BR = EMPTY_SQUARE_TILE + $11
+
+    LDA #0
+    STA currentRowStart
+    ;STA currentCol
+    STA isBottomRow
+    LDA #10
+    STA nextRowStart
+    LDA #BOARD_NUM_ROWS * 2   ; 2 tile rows per square row
+    STA remainingTileRows
+
+    CLC
+    LDA #<NAMETABLE_BL
+    ADC #<BOARD_NAMETABLE_OFFSET
+    STA nametablePtrLo
+    LDA #>NAMETABLE_BL
+    ADC #>BOARD_NAMETABLE_OFFSET
+    STA nametablePtrHi
+
+    BIT isMainBoardPlayer
+    BMI :+
+    ; main board is CPU
+    LDA #<cpuBoard
+    STA boardPtr
+    LDA #>cpuBoard
+    STA boardPtr + 1
+    JMP DisableRendering
+:
+    ; main board is player
+    LDA #<playerBoard
+    STA boardPtr
+    LDA #>playerBoard
+    STA boardPtr + 1
+
+DisableRendering:
+    ; Disable NMI and rendering
+    LDA #0
+    STA PPUMASK
+    LDA ppuControl
+    AND #%01111100 ; clear nametable and NMI bits
+    ORA #%00000010 ; set nametable bits
+    STA ppuControl
+    STA PPUCTRL
+
+    BIT PPUSTATUS  ; prepares PPUADDR
+; End init
+
+    ; The outer loop (RowLoop) is over tile rows from top to bottom. Because
+    ; each board square covers two tile rows, we need to read the same section
+    ; of the board array twice: first for the top set of tiles from left to
+    ; right and second for the bottom set.
+RowLoop:
+    LDA #BOARD_NUM_COLS
+    STA remainingTileCols
+
+    LDA nametablePtrHi
+    STA PPUADDR
+    LDA nametablePtrLo
+    STA PPUADDR
+
+    LDY currentRowStart
+ColumnLoop:
+    LDA (boardPtr),Y
+    BMI @drawShipTile        ; 
+
+@drawEmptyTile:
+    LDA #EMPTY_SQUARE_TILE
+    BIT isBottomRow
+    BPL :+
+    CLC
+    ADC #CHAR_TILES_PER_ROW
+:
+    STA PPUDATA
+    CLC
+    ADC #1
+    STA PPUDATA
+    JMP @iterate
+
+@drawShipTile:
+    AND #%00000111
+    TAX
+    LDA ShipTiles,X
+    BIT isBottomRow
+    BPL :+
+    CLC
+    ADC #CHAR_TILES_PER_ROW
+:
+    STA PPUDATA
+    CLC
+    ADC #1
+    STA PPUDATA
+
+@iterate:
+    INY
+    DEC remainingTileCols
+    BNE ColumnLoop
+
+    DEC remainingTileRows
+    BEQ SetPalettes
+
+    ; Prepare the next row
+    CLC
+    LDA nametablePtrLo
+    ADC #32
+    STA nametablePtrLo
+    LDA nametablePtrHi
+    ADC #0
+    STA nametablePtrHi
+
+    BIT isBottomRow
+    BMI @prepTopTileRow  ; branch if currently bottom, switch to top
+
+@prepBottomTileRow:
+    LDA #%10000000
+    STA isBottomRow
+    JMP RowLoop
+
+@prepTopTileRow:
+    LDA #0
+    STA isBottomRow
+    LDA nextRowStart
+    STA currentRowStart
+    CLC
+    ADC #BOARD_NUM_COLS
+    STA nextRowStart
+    JMP RowLoop
+
+SetPalettes:
+    ; Loop through the board squares one more time to set the palettes in the
+    ; nametable attributes.
+    ;
+    ; The main board is positioned such that square (0,0) occupies the upper-
+    ; right quadrant of a 4-tile by 4-tile attribute region.
+    ;
+    ; ,---+---+---+---.
+    ; |   |   |   |   |
+    ; + D1-D0 + D3-D2 +
+    ; |   |   |   |   |
+    ; +---+---+---+---+
+    ; |   |   |   |   |
+    ; + D5-D4 + D7-D6 +
+    ; |   |   |   |   |
+    ; `---+---+---+---'
+    ;
+    ; The loop is actually over attribute bytes, left to right then top to
+    ; bottom.
+    ;
+topRowArrayId          = currentRowStart      ; reuse variables
+bottomRowArrayId       = nextRowStart
+attribute              = isBottomRow
+remainingAttributeRows = remainingTileRows
+
+PALETTE_UNHIT_SHIP_OR_EMPTY  = $00 
+PALETTE_HIT_OR_MISS          = $01
+PALETTE_TEXT                 = $03
+ATTRIBUTE_MASK_LEFT          = (PALETTE_TEXT << 4) | (PALETTE_TEXT)
+ATTRIBUTE_MASK_RIGHT         = (PALETTE_TEXT << 6) | (PALETTE_TEXT << 2)
+ATTRIBUTE_BYTES_PER_ROW      = 6
+
+    CLC
+    LDA #<NAMETABLE_BL
+    ADC #<BOARD_ATTRIBUTE_OFFSET
+    STA nametablePtrLo
+    LDA #>NAMETABLE_BL
+    ADC #>BOARD_ATTRIBUTE_OFFSET
+    STA nametablePtrHi
+
+    ; A single attribute byte covers two rows of the board array. We track
+    ; those array indexes separately to avoid having to constantly add
+    ; and subtract 10.
+    LDA #0
+    STA topRowArrayId
+    LDA #10
+    STA bottomRowArrayId
+    LDA #5
+    STA remainingAttributeRows
+
+@rowLoop:
+    ; Set up PPUADDR
+    LDA nametablePtrHi
+    STA PPUADDR
+    LDA nametablePtrLo
+    STA PPUADDR
+
+    ; The left-most column is special since it includes the text labels for the
+    ; rows, and text has its own palette.
+    LDY topRowArrayId   ; square in upper-right quadrant 
+    LDA (boardPtr),Y
+    JSR GetPaletteFromBoardSquareValue
+    ASL  ; scooch over to d3d2
+    ASL
+    ORA #ATTRIBUTE_MASK_LEFT
+    STA attribute
+
+    LDY bottomRowArrayId ; square in bottom-right quadrant 
+    LDA (boardPtr),Y
+    JSR GetPaletteFromBoardSquareValue
+    CLC ; scooch over to d7d6
+    ROR  
+    ROR
+    ROR
+    ORA attribute
+    STA PPUDATA
+
+    INC topRowArrayId
+    INC bottomRowArrayId
+
+    ; The next four attribute bytes only contain board squares and can be
+    ; handled in a loop.
+    LDX #4 ; X = remaining attribute bytes for loop
+@middleLoop:
+    LDY topRowArrayId   ; upper-left (d1d0)
+    LDA (boardPtr),Y
+    JSR GetPaletteFromBoardSquareValue
+    STA attribute
+
+    INY                 ; upper-right (d3d2)
+    LDA (boardPtr),Y
+    JSR GetPaletteFromBoardSquareValue
+    ASL
+    ASL
+    ORA attribute
+    STA attribute
+
+    INY
+    STY topRowArrayId
+
+    LDY bottomRowArrayId ; bottom-left (d5d4)
+    LDA (boardPtr),Y
+    JSR GetPaletteFromBoardSquareValue
+    ASL
+    ASL
+    ASL
+    ASL
+    ORA attribute
+    STA attribute
+
+    INY                 ; bottom-right (d7d6)
+    LDA (boardPtr),Y
+    JSR GetPaletteFromBoardSquareValue
+    CLC
+    ROR
+    ROR
+    ROR
+    ORA attribute
+    STA PPUDATA
+
+    INY
+    STY bottomRowArrayId
+    
+    DEX
+    BEQ @lastColumn
+    JMP @middleLoop
+
+@lastColumn:
+    ; The last column, like the first, is special because the right-most
+    ; squares are not part of the board.
+
+    LDY topRowArrayId   ; upper-left (d1d0)
+    LDA (boardPtr),Y
+    JSR GetPaletteFromBoardSquareValue
+    STA attribute
+    ; INY
+    ; STY topRowArrayId
+
+    LDY bottomRowArrayId ; bottom-left (d5d4)
+    LDA (boardPtr),Y
+    JSR GetPaletteFromBoardSquareValue
+    ASL
+    ASL
+    ASL
+    ASL
+    ORA attribute
+    ORA #ATTRIBUTE_MASK_RIGHT
+    STA PPUDATA
+
+    DEC remainingAttributeRows
+    BEQ End
+
+    CLC
+    LDA topRowArrayId 
+    ADC #BOARD_SQUARES_PER_LINE + 1 
+    STA topRowArrayId
+    LDA bottomRowArrayId
+    ADC #BOARD_SQUARES_PER_LINE + 1
+    STA bottomRowArrayId
+    JMP @rowLoop
+
+; iterate?
+
+End:
+    ; Enable rendering and NMI
+    LDA #%00011110
+    STA PPUMASK
+    LDA ppuControl
+    ORA #%10000000 ; set NMI bit
+    STA ppuControl
+    STA PPUCTRL
+
+    RTS
+
+ShipTiles:
+    .byte SHIP_BOW_HORIZ_TILE, SHIP_BOW_VERT_TILE
+    .byte SHIP_MID_HORIZ_TILE, SHIP_MID_VERT_TILE
+    .byte SHIP_STERN_HORIZ_TILE, SHIP_STERN_VERT_TILE
+
+.endproc
+
 .proc DrawPlayBoardFireCursor
 ; DESCRIPTION: Draws the cursor the player moves on the play board to fire upon
-;              enemy ships.
+;              enemy ships. If the main board is the player's board, then the
+;              cursor is cleared from the screen.
 ; PARAMETERS:
 ;  * X - X coordinate
 ;  * Y - Y coordinate
@@ -1907,6 +2277,21 @@ SPRITE_TILE        = $10
 ATTRIBUTES         = $01  ; palette 1
 TILE_WIDTH         = $08
 
+    BIT isMainBoardPlayer
+    BPL DrawCursor
+
+ClearCursor:
+    LDY #16    ; number of bytes to write
+    LDX #BUFFER_START_INDEX
+    LDA #$FF
+@loop:
+    STA OAMBUFFER,X
+    INX
+    DEY
+    BNE @loop
+    JMP End
+
+DrawCursor:
     LDA StartPixelX,X
     STA spriteX
     LDA StartPixelY,Y
@@ -2215,6 +2600,27 @@ End_ClearZ:
 End_SetZ:
     LDA #0
 End:
+    RTS
+.endproc
+
+.proc GetPaletteFromBoardSquareValue
+; DESCRIPTION: Compute the palette to use for a square on the main board from
+;              the square's value.
+; PARAMETERS:
+;  * A - The square's value
+; RETURNS:
+;  * A - Palette ID
+; ALTERS: A
+;------------------------------------------------------------------------------
+PALETTE_UNHIT_SHIP_OR_EMPTY  = $00 
+PALETTE_HIT_OR_MISS          = $01
+
+    AND #%01000000
+    BEQ :+
+    LDA #PALETTE_HIT_OR_MISS
+    RTS
+:
+    LDA #PALETTE_UNHIT_SHIP_OR_EMPTY
     RTS
 .endproc
 
