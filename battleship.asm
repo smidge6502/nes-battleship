@@ -25,6 +25,12 @@ NAMETABLE_TR = $2400 ; top-right
 NAMETABLE_BL = $2800 ; bottom-left
 NAMETABLE_BR = $2C00 ; bottom-right
 
+NAMETABLE_ATTRIBUTE_OFFSET = $3C0
+NAMETABLE_ATTRIBUTE_TL = NAMETABLE_TL + NAMETABLE_ATTRIBUTE_OFFSET
+NAMETABLE_ATTRIBUTE_TR = NAMETABLE_TR + NAMETABLE_ATTRIBUTE_OFFSET
+NAMETABLE_ATTRIBUTE_BL = NAMETABLE_BL + NAMETABLE_ATTRIBUTE_OFFSET
+NAMETABLE_ATTRIBUTE_BR = NAMETABLE_BR + NAMETABLE_ATTRIBUTE_OFFSET
+
 ; Ship tiles
 ; Each ship part is 2x2 tiles. The value here
 ; is the upper-left tile.
@@ -61,6 +67,9 @@ BOARD_NUM_COLS         = 10
 BOARD_NUM_SQUARES      = BOARD_NUM_ROWS * BOARD_NUM_COLS
 
 CURSOR_BLINK_CHECK_MASK = %00010000 ; show cursor if this AND globalTimer = 0
+
+; Pointer to nametable attribute byte for (X,Y) = (0,0)
+BOARD_ATTRIBUTE_PTR = NAMETABLE_ATTRIBUTE_BL + 2*NAMETABLE_ATTRIBUTE_BYTES_PER_LINE
 
 .segment "HEADER"
 .byte "NES"
@@ -168,6 +177,12 @@ cpuBoard:              .res 100
 ;  | | - ship ID
 ;  | - has been fired upon flag (1=yes)
 ;  - has ship flag (1 = yes)
+
+ATTRIBUTE_CACHE_NUM_ROWS      = 5
+ATTRIBUTE_CACHE_BYTES_PER_ROW = 6
+ATTRIBUTE_CACHE_NUM_BYTES     = ATTRIBUTE_CACHE_NUM_ROWS * ATTRIBUTE_CACHE_BYTES_PER_ROW
+playerBoardAttributeCache:  .res ATTRIBUTE_CACHE_NUM_BYTES
+cpuBoardAttributeCache:     .res ATTRIBUTE_CACHE_NUM_BYTES
 
 placedShipsX:          .res NUM_SHIPS
 placedShipsY:          .res NUM_SHIPS
@@ -1667,6 +1682,7 @@ Init:
     JSR LoadPalette
 
     JSR DrawEmptyMiniMap
+    JSR InitAttributeCaches
 
     ; Enable rendering and NMI
     LDA #%00011110
@@ -1743,17 +1759,86 @@ CheckJoypad:
     LDY #0  ; wrap back to top row
 :
     STY cursorY
-    JMP DrawCursor
+    JMP @checkA
 
 @checkUp:
     LDA pressedButtons1
     AND #BUTTON_UP
-    BEQ DrawCursor
+    BEQ @checkA
     DEY
     BPL :+
     LDY #BOARD_NUM_ROWS - 1 ; wrap back to bottom row
 :
     STY cursorY
+    JMP DrawCursor
+
+@checkA:
+    LDA pressedButtons1
+    AND #BUTTON_A
+    BEQ DrawCursor
+
+EnqueueHitOrMissTiles:
+    LDX cursorX
+    LDY cursorY
+    JSR GetBoardArrayIdFromXY
+    JSR FireMissileOnSquare
+    BCC DrawCursor
+
+    ; Place the hit or miss tile on the board.
+    ; First, determine the correct tile (hit or miss).
+    BNE :+
+    LDA #MISS_SQUARE_TILE
+    BCS @storeTiles
+:
+    LDA #HIT_SQUARE_TILE
+
+@storeTiles:
+    ; Write the tile data to the queues
+    STA NQUEUE0
+    CLC
+    ADC #1
+    STA NQUEUE0 + 1
+    ADC #CHAR_TILES_PER_ROW - 1
+    STA NQUEUE1
+    ADC #1
+    STA NQUEUE1 + 1
+    
+    ; Terminators
+    LDA #0
+    STA NQUEUE0 + 2
+    STA NQUEUE1 + 2
+
+    ; Nametable pointers
+    LDX cursorX
+    LDY cursorY
+    JSR GetSquareNametablePtrFromXY  ; preserves Y register
+    STA nametableQueueAddressHi      ; NQUEUE0
+    STX nametableQueueAddressLo
+    STA nametableQueueAddressHi + 1  ; NQUEUE1
+    TXA
+    CLC
+    ADC #NAMETABLE_TILES_PER_LINE
+    STA nametableQueueAddressLo + 1
+
+    ; Nametable write direction
+    LDA ppuControl
+    AND #%11111011
+    ORA #NAMETABLE_QUEUE_STATUS_HORIZONTAL
+    STA nametableQueueStatus
+    STA nametableQueueStatus + 1
+
+    ; Update palette
+    CLC
+    LDX cursorX
+    LDY cursorY
+    LDA #PALETTE_HIT_OR_MISS
+    JSR UpdateAttributeCacheForOneSquareXY
+
+    STY nametableQueueAddressHi + 2
+    STX nametableQueueAddressLo + 2
+    STA NQUEUE2  ; hopefully never 0
+    LDA #0
+    STA NQUEUE2 + 1
 
 DrawCursor:
     LDX cursorX
@@ -1945,7 +2030,7 @@ isBottomRow        = $04 ; set d7 = 1 if on the bottom half of a row of squares
 remainingTileRows  = $05
 remainingTileCols  = $06
 boardPtr           = $07 ; 2 bytes
-attributes         = $09 ; 6 bytes
+;attributes         = $09 ; 6 bytes
 
 BOARD_NAMETABLE_OFFSET = $102
 BOARD_ATTRIBUTE_OFFSET = $3D0
@@ -2013,12 +2098,33 @@ RowLoop:
     STA PPUADDR
 
     LDY currentRowStart
-ColumnLoop:
-    LDA (boardPtr),Y
-    BMI @drawShipTile        ; 
 
-@drawEmptyTile:
+ColumnLoop:
+    ; Determine which 2x2-tile square to draw
+    LDA (boardPtr),Y
+    BMI @hasShip
+
+    ; No ship
+    AND #%01000000
+    BEQ :+
+    LDA #MISS_SQUARE_TILE
+    JMP @drawTile
+:
     LDA #EMPTY_SQUARE_TILE
+    JMP @drawTile
+
+@hasShip:
+    AND #%01000000
+    BEQ :+
+    LDA #HIT_SQUARE_TILE
+    JMP @drawTile
+:
+    LDA (boardPtr),Y
+    AND #%00000111
+    TAX
+    LDA ShipTiles,X
+
+@drawTile:
     BIT isBottomRow
     BPL :+
     CLC
@@ -2029,20 +2135,6 @@ ColumnLoop:
     ADC #1
     STA PPUDATA
     JMP @iterate
-
-@drawShipTile:
-    AND #%00000111
-    TAX
-    LDA ShipTiles,X
-    BIT isBottomRow
-    BPL :+
-    CLC
-    ADC #CHAR_TILES_PER_ROW
-:
-    STA PPUDATA
-    CLC
-    ADC #1
-    STA PPUDATA
 
 @iterate:
     INY
@@ -2080,167 +2172,205 @@ ColumnLoop:
     JMP RowLoop
 
 SetPalettes:
-    ; Loop through the board squares one more time to set the palettes in the
-    ; nametable attributes.
-    ;
-    ; The main board is positioned such that square (0,0) occupies the upper-
-    ; right quadrant of a 4-tile by 4-tile attribute region.
-    ;
-    ; ,---+---+---+---.
-    ; |   |   |   |   |
-    ; + D1-D0 + D3-D2 +
-    ; |   |   |   |   |
-    ; +---+---+---+---+
-    ; |   |   |   |   |
-    ; + D5-D4 + D7-D6 +
-    ; |   |   |   |   |
-    ; `---+---+---+---'
-    ;
-    ; The loop is actually over attribute bytes, left to right then top to
-    ; bottom.
-    ;
-topRowArrayId          = currentRowStart      ; reuse variables
-bottomRowArrayId       = nextRowStart
-attribute              = isBottomRow
-remainingAttributeRows = remainingTileRows
+    BIT isMainBoardPlayer
+    BMI :+
+    ; main board is CPU
+    LDA #<cpuBoardAttributeCache
+    STA boardPtr
+    LDA #>cpuBoardAttributeCache
+    STA boardPtr + 1
+    JMP @copyAttributeCache
+:
+    ; main board is player
+    LDA #<playerBoardAttributeCache
+    STA boardPtr
+    LDA #>playerBoardAttributeCache
+    STA boardPtr + 1
 
-PALETTE_UNHIT_SHIP_OR_EMPTY  = $00 
-PALETTE_HIT_OR_MISS          = $01
-PALETTE_TEXT                 = $03
-ATTRIBUTE_MASK_LEFT          = (PALETTE_TEXT << 4) | (PALETTE_TEXT)
-ATTRIBUTE_MASK_RIGHT         = (PALETTE_TEXT << 6) | (PALETTE_TEXT << 2)
-ATTRIBUTE_BYTES_PER_ROW      = 6
-
-    CLC
-    LDA #<NAMETABLE_BL
-    ADC #<BOARD_ATTRIBUTE_OFFSET
-    STA nametablePtrLo
-    LDA #>NAMETABLE_BL
-    ADC #>BOARD_ATTRIBUTE_OFFSET
+@copyAttributeCache:
+    LDY #0                               ; attribute cache index
+    LDA #>BOARD_ATTRIBUTE_PTR
     STA nametablePtrHi
+    LDA #<BOARD_ATTRIBUTE_PTR
+    STA nametablePtrLo
 
-    ; A single attribute byte covers two rows of the board array. We track
-    ; those array indexes separately to avoid having to constantly add
-    ; and subtract 10.
-    LDA #0
-    STA topRowArrayId
-    LDA #10
-    STA bottomRowArrayId
-    LDA #5
-    STA remainingAttributeRows
-
-@rowLoop:
-    ; Set up PPUADDR
+@cacheRowLoop:
+    LDX #ATTRIBUTE_CACHE_BYTES_PER_ROW   ; remaining columns
     LDA nametablePtrHi
     STA PPUADDR
     LDA nametablePtrLo
     STA PPUADDR
 
-    ; The left-most column is special since it includes the text labels for the
-    ; rows, and text has its own palette.
-    LDY topRowArrayId   ; square in upper-right quadrant 
+@cacheColLoop:
     LDA (boardPtr),Y
-    JSR GetPaletteFromBoardSquareValue
-    ASL  ; scooch over to d3d2
-    ASL
-    ORA #ATTRIBUTE_MASK_LEFT
-    STA attribute
-
-    LDY bottomRowArrayId ; square in bottom-right quadrant 
-    LDA (boardPtr),Y
-    JSR GetPaletteFromBoardSquareValue
-    CLC ; scooch over to d7d6
-    ROR  
-    ROR
-    ROR
-    ORA attribute
     STA PPUDATA
-
-    INC topRowArrayId
-    INC bottomRowArrayId
-
-    ; The next four attribute bytes only contain board squares and can be
-    ; handled in a loop.
-    LDX #4 ; X = remaining attribute bytes for loop
-@middleLoop:
-    LDY topRowArrayId   ; upper-left (d1d0)
-    LDA (boardPtr),Y
-    JSR GetPaletteFromBoardSquareValue
-    STA attribute
-
-    INY                 ; upper-right (d3d2)
-    LDA (boardPtr),Y
-    JSR GetPaletteFromBoardSquareValue
-    ASL
-    ASL
-    ORA attribute
-    STA attribute
-
     INY
-    STY topRowArrayId
 
-    LDY bottomRowArrayId ; bottom-left (d5d4)
-    LDA (boardPtr),Y
-    JSR GetPaletteFromBoardSquareValue
-    ASL
-    ASL
-    ASL
-    ASL
-    ORA attribute
-    STA attribute
-
-    INY                 ; bottom-right (d7d6)
-    LDA (boardPtr),Y
-    JSR GetPaletteFromBoardSquareValue
-    CLC
-    ROR
-    ROR
-    ROR
-    ORA attribute
-    STA PPUDATA
-
-    INY
-    STY bottomRowArrayId
-    
     DEX
-    BEQ @lastColumn
-    JMP @middleLoop
+    BNE @cacheColLoop
 
-@lastColumn:
-    ; The last column, like the first, is special because the right-most
-    ; squares are not part of the board.
+    CPY #ATTRIBUTE_CACHE_NUM_BYTES
+    BCS End
 
-    LDY topRowArrayId   ; upper-left (d1d0)
-    LDA (boardPtr),Y
-    JSR GetPaletteFromBoardSquareValue
-    STA attribute
-    ; INY
-    ; STY topRowArrayId
+    LDA nametablePtrLo                        ; carry is clear
+    ADC #NAMETABLE_ATTRIBUTE_BYTES_PER_LINE
+    STA nametablePtrLo
+    JMP @cacheRowLoop
 
-    LDY bottomRowArrayId ; bottom-left (d5d4)
-    LDA (boardPtr),Y
-    JSR GetPaletteFromBoardSquareValue
-    ASL
-    ASL
-    ASL
-    ASL
-    ORA attribute
-    ORA #ATTRIBUTE_MASK_RIGHT
-    STA PPUDATA
+; SetPalettes:
+;     ; Loop through the board squares one more time to set the palettes in the
+;     ; nametable attributes.
+;     ;
+;     ; The main board is positioned such that square (0,0) occupies the upper-
+;     ; right quadrant of a 4-tile by 4-tile attribute region.
+;     ;
+;     ; ,---+---+---+---.
+;     ; |   |   |   |   |
+;     ; + D1-D0 + D3-D2 +
+;     ; |   |   |   |   |
+;     ; +---+---+---+---+
+;     ; |   |   |   |   |
+;     ; + D5-D4 + D7-D6 +
+;     ; |   |   |   |   |
+;     ; `---+---+---+---'
+;     ;
+;     ; The loop is actually over attribute bytes, left to right then top to
+;     ; bottom.
+;     ;
+; topRowArrayId          = currentRowStart      ; reuse variables
+; bottomRowArrayId       = nextRowStart
+; attribute              = isBottomRow
+; remainingAttributeRows = remainingTileRows
 
-    DEC remainingAttributeRows
-    BEQ End
+;     CLC
+;     LDA #<NAMETABLE_BL
+;     ADC #<BOARD_ATTRIBUTE_OFFSET
+;     STA nametablePtrLo
+;     LDA #>NAMETABLE_BL
+;     ADC #>BOARD_ATTRIBUTE_OFFSET
+;     STA nametablePtrHi
 
-    CLC
-    LDA topRowArrayId 
-    ADC #BOARD_SQUARES_PER_LINE + 1 
-    STA topRowArrayId
-    LDA bottomRowArrayId
-    ADC #BOARD_SQUARES_PER_LINE + 1
-    STA bottomRowArrayId
-    JMP @rowLoop
+;     ; A single attribute byte covers two rows of the board array. We track
+;     ; those array indexes separately to avoid having to constantly add
+;     ; and subtract 10.
+;     LDA #0
+;     STA topRowArrayId
+;     LDA #10
+;     STA bottomRowArrayId
+;     LDA #5
+;     STA remainingAttributeRows
 
-; iterate?
+; @rowLoop:
+;     ; Set up PPUADDR
+;     LDA nametablePtrHi
+;     STA PPUADDR
+;     LDA nametablePtrLo
+;     STA PPUADDR
+
+;     ; The left-most column is special since it includes the text labels for the
+;     ; rows, and text has its own palette.
+;     LDY topRowArrayId   ; square in upper-right quadrant 
+;     LDA (boardPtr),Y
+;     JSR GetPaletteFromBoardSquareValue
+;     ASL  ; scooch over to d3d2
+;     ASL
+;     ORA #ATTRIBUTE_MASK_LEFT
+;     STA attribute
+
+;     LDY bottomRowArrayId ; square in bottom-right quadrant 
+;     LDA (boardPtr),Y
+;     JSR GetPaletteFromBoardSquareValue
+;     CLC ; scooch over to d7d6
+;     ROR  
+;     ROR
+;     ROR
+;     ORA attribute
+;     STA PPUDATA
+
+;     INC topRowArrayId
+;     INC bottomRowArrayId
+
+;     ; The next four attribute bytes only contain board squares and can be
+;     ; handled in a loop.
+;     LDX #4 ; X = remaining attribute bytes for loop
+; @middleLoop:
+;     LDY topRowArrayId   ; upper-left (d1d0)
+;     LDA (boardPtr),Y
+;     JSR GetPaletteFromBoardSquareValue
+;     STA attribute
+
+;     INY                 ; upper-right (d3d2)
+;     LDA (boardPtr),Y
+;     JSR GetPaletteFromBoardSquareValue
+;     ASL
+;     ASL
+;     ORA attribute
+;     STA attribute
+
+;     INY
+;     STY topRowArrayId
+
+;     LDY bottomRowArrayId ; bottom-left (d5d4)
+;     LDA (boardPtr),Y
+;     JSR GetPaletteFromBoardSquareValue
+;     ASL
+;     ASL
+;     ASL
+;     ASL
+;     ORA attribute
+;     STA attribute
+
+;     INY                 ; bottom-right (d7d6)
+;     LDA (boardPtr),Y
+;     JSR GetPaletteFromBoardSquareValue
+;     CLC
+;     ROR
+;     ROR
+;     ROR
+;     ORA attribute
+;     STA PPUDATA
+
+;     INY
+;     STY bottomRowArrayId
+    
+;     DEX
+;     BEQ @lastColumn
+;     JMP @middleLoop
+
+; @lastColumn:
+;     ; The last column, like the first, is special because the right-most
+;     ; squares are not part of the board.
+
+;     LDY topRowArrayId   ; upper-left (d1d0)
+;     LDA (boardPtr),Y
+;     JSR GetPaletteFromBoardSquareValue
+;     STA attribute
+;     ; INY
+;     ; STY topRowArrayId
+
+;     LDY bottomRowArrayId ; bottom-left (d5d4)
+;     LDA (boardPtr),Y
+;     JSR GetPaletteFromBoardSquareValue
+;     ASL
+;     ASL
+;     ASL
+;     ASL
+;     ORA attribute
+;     ORA #ATTRIBUTE_MASK_RIGHT
+;     STA PPUDATA
+
+;     ; Row iteration logic
+;     DEC remainingAttributeRows
+;     BEQ End
+
+;     CLC
+;     LDA topRowArrayId 
+;     ADC #BOARD_SQUARES_PER_LINE + 1 
+;     STA topRowArrayId
+;     LDA bottomRowArrayId
+;     ADC #BOARD_SQUARES_PER_LINE + 1
+;     STA bottomRowArrayId
+;     JMP @rowLoop
 
 End:
     ; Enable rendering and NMI
@@ -2378,53 +2508,51 @@ StartPixelY:
   .byte Y0 + 5*16, Y0 + 6*16, Y0 + 7*16, Y0 + 8*16, Y0 + 9*16
 .endproc
 
-; .proc UpdateButtonPressedSprites
-; ; DESCRIPTION: Updates the OAM buffer with the sprites for pressed buttons
-; ;              in the controller test.
-; ; ALTERS: A, X, Y, $00
-; BUTTON_SPRITE_BYTES = NUM_BUTTONS << 2 ; 4 bytes per button
-; buttonState = $E0
-;     LDA buttons1
-;     LDX #0 ; X = OAM buffer byte being written
-;     LDY #NUM_BUTTONS ; Y = buttons remaining
-;     LDA buttons1
-;     STA buttonState ; copy button input
+.proc FireMissileOnSquare
+; DESCRIPTION: Fires a missile at a board square.
+;              The main board is always the board fired upon.
+;              Sets the "fired upon" flag on the square.
+; PARAMETERS:
+;  * A - Array ID of the board square to fire upon
+; RETURNS:
+;  * C - set if missile fired; clear if not (square already fired upon)
+;  * Z - set if miss; clear if hit; check only if C set
+; ALTERS: A, Y
+;------------------------------------------------------------------------------
+FIRED_UPON_BIT_MASK = %01000000
+    TAY
+    BIT isMainBoardPlayer
+    BMI :+
+    LDA cpuBoard,Y
+    JMP CheckIfAlreadyFiredUpon
+:
+    LDA playerBoard,Y
 
-; Loop:
-;     ROR buttonState
-;     BCC :+ 
-;     ; If the button is pressed, copy its sprite's data to the buffer.
-;     LDA SpriteData,X
-;     STA OAMBUFFER,X
-;     INX
-;     LDA SpriteData,X
-;     STA OAMBUFFER,X
-;     INX
-;     LDA SpriteData,X
-;     STA OAMBUFFER,X
-;     INX
-;     LDA SpriteData,X
-;     STA OAMBUFFER,X
-;     INX
-;     JMP LoopEnd
-; :
-;     ; If not pressed, copy in $FF for the sprite.
-;     LDA #$FF
-;     STA OAMBUFFER,X
-;     INX
-;     STA OAMBUFFER,X
-;     INX
-;     STA OAMBUFFER,X
-;     INX
-;     STA OAMBUFFER,X
-;     INX
-; LoopEnd:
-;     DEY
-;     BEQ :+
-;     JMP Loop
-; :
-;     RTS
-; .endproc
+CheckIfAlreadyFiredUpon:
+    PHA               ; save the board byte for later
+    AND #FIRED_UPON_BIT_MASK
+    BEQ FireMissile
+
+    ; Quit since the square has already been fired upon
+    PLA
+    CLC
+    RTS
+
+FireMissile:
+    PLA                       ; set the fired-upon flag on the board square
+    ORA #FIRED_UPON_BIT_MASK
+    BIT isMainBoardPlayer
+    BMI :+
+    STA cpuBoard,Y
+    JMP End
+:
+    STA playerBoard,Y
+
+End:
+    SEC
+    AND #%10000000   ; set/clear Z flag
+    RTS
+.endproc
 
 
 ;##############################################
@@ -2768,7 +2896,198 @@ sourceData = $00
     RTS
 .endproc
 
-.proc hey
+;##############################################
+; ATTRIBUTE CACHE ROUTINES
+;##############################################
+
+PALETTE_UNHIT_SHIP_OR_EMPTY  = $00 
+PALETTE_HIT_OR_MISS          = $01
+PALETTE_TEXT                 = $03
+ATTRIBUTE_MASK_LEFT          = (PALETTE_TEXT << 4) | (PALETTE_TEXT)
+ATTRIBUTE_MASK_RIGHT         = (PALETTE_TEXT << 6) | (PALETTE_TEXT << 2)
+
+.proc InitAttributeCaches
+; DESCRIPTION: Initialize the nametable attribute byte caches for both the
+;              player's and CPU's boards.
+;------------------------------------------------------------------------------
+
+    LDX #0
+
+Loop:
+    LDA #ATTRIBUTE_MASK_LEFT
+    STA playerBoardAttributeCache,X
+    STA cpuBoardAttributeCache,X
+    INX
+
+    LDA #0
+    STA playerBoardAttributeCache,X
+    STA cpuBoardAttributeCache,X
+    INX
+    STA playerBoardAttributeCache,X
+    STA cpuBoardAttributeCache,X
+    INX
+    STA playerBoardAttributeCache,X
+    STA cpuBoardAttributeCache,X
+    INX
+    STA playerBoardAttributeCache,X
+    STA cpuBoardAttributeCache,X
+    INX
+    
+    LDA #ATTRIBUTE_MASK_RIGHT
+    STA playerBoardAttributeCache,X
+    STA cpuBoardAttributeCache,X
+    INX
+
+    CPX #ATTRIBUTE_CACHE_NUM_BYTES
+    BCC Loop
+
+End:
+    RTS
+.endproc
+
+.proc UpdateAttributeCacheForOneSquareXY
+; DESCRIPTION: Update the palette for a single board square in the nametable
+;              attribute byte cache.
+; PARAMETERS:
+;  * C - set if player's board; clear if CPU's board
+;  * X - X position of board square
+;  * Y - Y position of board square
+;  * A - Palette ID to set
+; RETURNS:
+;  * X - Lo byte of nametable attribute address
+;  * Y - Hi byte of nametable attribute address
+;  * A - Updated attribute byte value
+; ALTERS: A, X, Y
+;------------------------------------------------------------------------------
+cachePtr       = $00 ; 2 bytes
+cacheIx        = $02
+boardY         = $03
+paletteId      = $04
+nametablePtrLo = $05
+mask           = $06
+
+    ;PHA
+    STA paletteId
+    STY boardY
+
+    ; Determine which board cache to update
+    BCS :+
+    LDA #<cpuBoardAttributeCache
+    STA cachePtr
+    LDA #>cpuBoardAttributeCache
+    STA cachePtr + 1
+    BCC CalculateNametablePtr
+
+:
+    LDA #<playerBoardAttributeCache
+    STA cachePtr
+    LDA #>playerBoardAttributeCache
+    STA cachePtr + 1
+
+CalculateNametablePtr:
+    CLC
+    LDA NametableOffsetLoX,X
+    ADC NametableOffsetLoY,Y
+    ADC #<ATTRIBUTE_PTR_OFFSET
+    STA nametablePtrLo
+
+CalculateIndex:
+    ; Figure out the index of the byte in the cache
+    ; ix = 6*(Y/2) + (X+1)/2
+    LDA boardY ; save this off since we need to divide it by 2
+    PHA
+
+    CLC
+    TXA
+    ADC #1
+    LSR
+    LSR boardY
+    CLC
+    ADC boardY
+    ADC boardY
+    ADC boardY
+    ADC boardY
+    ADC boardY
+    ADC boardY
+    STA cacheIx
+
+    PLA         ; restore boardY
+    STA boardY
+
+ShiftMaskAndPaletteBits:
+    ; Shift the mask and palette bits to the position for the target quadrant.
+    ;   X % 2 = 0 --> right
+    ;   X % 2 = 1 --> left
+    ;   Y % 2 = 0 --> upper
+    ;   Y % 2 = 1 --> lower
+    LDA #%00000011 ; starting mask for upper-left (d1d0)
+    STA mask
+
+    LDA boardY
+    AND #1
+    BNE @lowerQuadrants
+
+@upperQuadrants:
+    TXA
+    AND #1
+    BNE SetAttributeByte ; branch if upper-left quadrant (d1d0)
+
+    ; upper-right quadrant
+    ASL mask
+    ASL mask
+    ASL paletteId
+    ASL paletteId
+    JMP SetAttributeByte
+
+@lowerQuadrants:
+    ; Shift four bytes to the left for lower quadrants
+    ASL mask
+    ASL mask
+    ASL mask
+    ASL mask
+    ASL paletteId
+    ASL paletteId
+    ASL paletteId
+    ASL paletteId
+
+    TXA
+    AND #1
+    BNE SetAttributeByte ; branch if lower-left quadrant (d5d4)
+
+    ; lower-right quadrant
+    ASL mask
+    ASL mask
+    ASL paletteId
+    ASL paletteId
+
+SetAttributeByte:
+    LDY cacheIx
+    LDA mask
+    EOR #%11111111      ; Flip the mask bits
+    AND (cachePtr),Y
+    ORA paletteId
+    STA (cachePtr),Y
+
+End:
+    LDX nametablePtrLo
+    LDY #>ATTRIBUTE_PTR_OFFSET
+    RTS
+
+;ATTRIBUTE_PTR_OFFSET = NAMETABLE_BL + NAMETABLE_ATTRIBUTE_OFFSET + 2*NAMETABLE_ATTRIBUTE_BYTES_PER_LINE ; = $2BD0
+ATTRIBUTE_PTR_OFFSET = NAMETABLE_ATTRIBUTE_BL + 2*NAMETABLE_ATTRIBUTE_BYTES_PER_LINE ; = $2BD0
+N_DY = NAMETABLE_ATTRIBUTE_BYTES_PER_LINE
+NametableOffsetLoY:
+  .byte $00,$00,N_DY,N_DY,2*N_DY,2*N_DY,3*N_DY,3*N_DY,4*N_DY,4*N_DY
+  ;.byte $00,N_DY,N_DY,2*N_DY,2*N_DY,3*N_DY,3*N_DY,4*N_DY,4*N_DY,5*N_DY
+NametableOffsetLoX:
+  .byte $00,$01,$01,$02,$02,$03,$03,$04,$04,$05  ; could also do (X + 1) / 2
+
+; C_DY = ATTRIBUTE_CACHE_BYTES_PER_ROW
+; CacheOffsetY:
+;   .byte $00,C_DY,C_DY,2*C_DY,2*C_DY,3*C_DY,3*C_DY,4*C_DY,4*C_DY,5*C_DY
+.endproc
+
+.proc hey ; IRQ handler
     INC $700
     JMP hey
 .endproc
