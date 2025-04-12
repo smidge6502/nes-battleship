@@ -1655,6 +1655,19 @@ Init:
     STA newCursorY
     STA isMainBoardPlayer
 
+@copyPlayerBoardToCpuBoard:
+    ; TODO - Remove this section.
+    ; This copies the player's board to the CPU's board. Its purpose is to
+    ; put something on the CPU board before that is properly implemented.
+    LDY #BOARD_NUM_SQUARES - 1
+:
+    LDA playerBoard,Y
+    AND #%10111111 ; clear "has missile" flag
+    STA cpuBoard,Y
+    DEY
+    BPL :-
+    JMP DrawCursor
+
     JMP End ; skip button checks
 InitEnd:
 
