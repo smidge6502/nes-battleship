@@ -2100,25 +2100,51 @@ RowLoop:
     LDY currentRowStart
 
 ColumnLoop:
-    ; Determine which 2x2-tile square to draw
+    ; Determine which 2x2-tile square to draw.
+    ;
+    ; Psuedocode:
+    ;   if no ship:
+    ;       if missile: MISS
+    ;       else: EMPTY
+    ;   else if no missile:
+    ;       if playerBoard: SHIP
+    ;       else: EMPTY
+    ;   else:
+    ;       if playerBoard: SHIP
+    ;       else if ship sunk: SHIP
+    ;       else: HIT
+    ;
     LDA (boardPtr),Y
-    BMI @hasShip
+    BMI @ifShip
 
-    ; No ship
+@ifNoShip:
     AND #%01000000
-    BEQ :+
+    BEQ @ifNoShipAndNoMissile
     LDA #MISS_SQUARE_TILE
     JMP @drawTile
-:
+
+@ifNoShipAndNoMissile:
     LDA #EMPTY_SQUARE_TILE
     JMP @drawTile
 
-@hasShip:
+@ifShip:
     AND #%01000000
-    BEQ :+
+    BEQ @elseIfNoMissile
+
+@elseIfMissile:
+    BIT isMainBoardPlayer
+    BMI @chooseShipTile
+    ; TODO: draw ship tile on CPU's board if ship sunk
     LDA #HIT_SQUARE_TILE
     JMP @drawTile
-:
+
+@elseIfNoMissile:
+    BIT isMainBoardPlayer
+    BMI @chooseShipTile
+    LDA #EMPTY_SQUARE_TILE
+    JMP @drawTile
+
+@chooseShipTile:
     LDA (boardPtr),Y
     AND #%00000111
     TAX
