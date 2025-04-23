@@ -1,6 +1,7 @@
 .include "nesdefs.inc"
 
 ; RAM addresses
+STACK     = $100
 OAMBUFFER = $200
 
 ; Controller button bits
@@ -177,6 +178,9 @@ cpuBoard:              .res 100
 ;  | | - ship ID
 ;  | - has been fired upon flag (1=yes)
 ;  - has ship flag (1 = yes)
+
+playerShipsRemainingHits:   .res NUM_SHIPS
+cpuShipsRemainingHits:      .res NUM_SHIPS
 
 ATTRIBUTE_CACHE_NUM_ROWS      = 5
 ATTRIBUTE_CACHE_BYTES_PER_ROW = 6
@@ -683,12 +687,15 @@ Init:
     LDA #ALL_SHIPS_PLACED_STRING_COUNT
     STA stringWriteCount
 
-    ; Clear the board
+    ; Clear the board and set player board as main board
+    LDA #0
     LDX #BOARD_NUM_SQUARES - 1
 :
     STA playerBoard,X
     DEX
     BPL :-
+    LDA #%10000000
+    STA isMainBoardPlayer
 
     ; Enable rendering and NMI
     LDA #%00011110
@@ -960,7 +967,7 @@ DrawBoard:
 
 @queueLoop:
     TAY
-    JSR GetBoardSquareFromArrayId ; A = char tile of upper-left tile of square
+    JSR GetBoardSquareTileFromArrayId ; A = char tile of upper-left tile of square
     STA currentSquare
 
     LDX iQueue
@@ -1002,95 +1009,17 @@ DrawBoard:
 
 
 DrawCursorShip:
-; This uses NQUEUE2 and NQUEUE3 to draw the ship.
     LDX newCursorX
     LDY newCursorY
-    JSR GetSquareNametablePtrFromXY
-    
-    ; The NQUEUE2 address is the same for both orientations.
-    STA nametableQueueAddressHi + 2
-    STX nametableQueueAddressLo + 2
-    STA nametableQueueAddressHi + 3  ; same hi byte for NQUEUE3
 
-    LDA newOrientation
-    BNE :+
-    ; horizontal
-    TXA
-    CLC
-    ADC #NAMETABLE_TILES_PER_LINE
-    STA nametableQueueAddressLo + 3
-    LDY #NAMETABLE_QUEUE_STATUS_HORIZONTAL
-    JMP @setStatus
-:
-    ; vertical
-    INX
-    STX nametableQueueAddressLo + 3
-    LDY #NAMETABLE_QUEUE_STATUS_VERTICAL
-
-@setStatus:
-    STY nametableQueueStatus + 2
-    LDA ppuControl
-    AND #%11111011
-    ORA nametableQueueStatus + 2
-    STA nametableQueueStatus + 2
-    STA nametableQueueStatus + 3
-
-@initTileQueueLoop:
-    LDX newShip
-    LDA ShipLengths,X
-    ASL                ; double to get length in tiles
-    STA shipNumTiles
-    LDY #0 ; Y = ship tile index (and queue index for NQUEUE2)
-
-    ; Choose the tile array to load into the queues based
-    ; on the ship's orientation
-    LDA newOrientation
-    BNE :+
-    ; horizontal
-    LDA ShipTilesHorizontalLo,X
-    STA shipTilePtr
-    LDA ShipTilesHorizontalHi,X
-    STA shipTilePtr + 1
-    BNE @nQueue2Loop
-:
-    ; vertical
-    LDA ShipTilesVerticalLo,X
-    STA shipTilePtr
-    LDA ShipTilesVerticalHi,X
-    STA shipTilePtr + 1
-
-@nQueue2Loop:
-    ; The tile and queue indices are in sync for the NQUEUE2 loop, so we just
-    ; use Y for NQUEUE2.
-    LDA (shipTilePtr),Y
-    STA NQUEUE2,Y
-
-    INY
-    CPY shipNumTiles
-    BCC @nQueue2Loop
-
-    ; Write the terminator
-    LDA #0
-    STA NQUEUE2,Y
-
-    ; Double the end of the loop for the second half (bottom or right)
-    LDA shipNumTiles
+    ; Set up a byte with the ship ID in d5-d3 and the orientation in d0.
+    LDA newShip
     ASL
-    STA shipNumTiles
+    ASL
+    ASL
+    ORA newOrientation
 
-    LDX #0
-@nQueue3Loop:
-    LDA (shipTilePtr),Y
-    STA NQUEUE3,X
-
-    INX
-    INY
-    CPY shipNumTiles
-    BCC @nQueue3Loop
-
-    ; Write the terminator
-    LDA #0
-    STA NQUEUE3,X
+    JSR DrawWholeShip
     
 UpdateCursor:
     JSR SetAttributeQueues
@@ -1236,24 +1165,29 @@ strLen   = $02
 .endproc
 
 .proc SetAttributeQueues
+; DESCRIPTION:
+;------------------------------------------------------------------------------
 ATTRIBUTE_START_PTR      = $2BC0
 BOARD_NORMAL_PALETTE_ID  = $00
 BOARD_OVERLAP_PALETTE_ID = $01
 TEXT_PALETTE_ID          = $03
 MAX_BYTES_PER_QUEUE      = 3
-
-; Read/write
-iShipSquare    = ProcessPlaceShips::iShipSquare
-dBoardArray    = ProcessPlaceShips::dBoardArray
-arrayId        = ProcessPlaceShips::arrayId
-shipNumSquares = ProcessPlaceShips::shipNumTiles
-
-iAttByte = $0D
-attX     = $0E
-attY     = $0F
-
 ATTRIBUTE_BOARD_NORMAL_X0 = (BOARD_NORMAL_PALETTE_ID << 6) | (TEXT_PALETTE_ID << 4) | (BOARD_NORMAL_PALETTE_ID << 2) | TEXT_PALETTE_ID
 ATTRIBUTE_BOARD_NORMAL_X_NOT_0 = (BOARD_NORMAL_PALETTE_ID << 6) | (BOARD_NORMAL_PALETTE_ID << 4) | (BOARD_NORMAL_PALETTE_ID << 2) | BOARD_NORMAL_PALETTE_ID
+
+shipNumSquares = $00
+iAttByte       = $01
+attX           = $02
+attY           = $03
+
+    LDA $00
+    PHA
+    LDA $01
+    PHA
+    LDA $02
+    PHA
+    LDA $03
+    PHA
 
     LDA #>ATTRIBUTE_START_PTR
     STA attributeQueueHi
@@ -1482,6 +1416,14 @@ AttByteLoop:
     STA attributeQueue1,X
 
 End:
+    PLA
+    STA $03
+    PLA
+    STA $02
+    PLA
+    STA $01
+    PLA
+    STA $00
     RTS
 
 ; Add these to get the starting pointer of the attribute table
@@ -1652,6 +1594,11 @@ MarkShipAsPlaced:
 .proc ProcessPlayBoard
 ; DESCRIPTION: Main routine for the play board.
 ;------------------------------------------------------------------------------
+
+boardSquare = $00
+bowX        = $01
+bowY        = $02
+
     ; Check if we need to initialize the screen
     TYA
     BEQ InitEnd
@@ -1691,6 +1638,15 @@ Init:
     ORA #%10000000 ; set NMI bit
     STA ppuControl
     STA PPUCTRL
+
+    ; Initialize remaining hits on ships before they sink
+    LDX #NUM_SHIPS - 1
+:
+    LDA ShipLengths,X
+    STA playerShipsRemainingHits,X
+    STA cpuShipsRemainingHits,X
+    DEX
+    BPL :-
 
     LDA #0
     STA cursorX
@@ -1775,70 +1731,105 @@ CheckJoypad:
 @checkA:
     LDA pressedButtons1
     AND #BUTTON_A
-    BEQ DrawCursor
+    BNE EnqueueHitOrMissTiles
+    
+    JMP DrawCursor
 
 EnqueueHitOrMissTiles:
     LDX cursorX
     LDY cursorY
     JSR GetBoardArrayIdFromXY
     JSR FireMissileOnSquare
-    BCC DrawCursor
+    BCS :+
+    JMP DrawCursor
 
+:
     ; Place the hit or miss tile on the board.
     ; First, determine the correct tile (hit or miss).
     BNE :+
     LDA #MISS_SQUARE_TILE
     BCS @storeTiles
 :
+    ; If this hit sinks a ship, reveal the ship. Otherwise, place a hit tile.
+    LDX cursorX
+    LDY cursorY
+    JSR GetBoardArrayIdFromXY
+    TAY
+    LDA cpuBoard,Y
+    JSR GetShipIdFromBoardByte
+    TAY
+    LDA cpuShipsRemainingHits,Y
+    BEQ @revealShip
+
     LDA #HIT_SQUARE_TILE
+    JMP @storeTiles
+
+@revealShip:
+    LDX cursorX
+    LDY cursorY
+    CLC
+    JSR FindBowOfShip
+
+    STX bowX
+    STY bowY
+
+    JSR GetBoardArrayIdFromXY
+    TAY
+    LDA cpuBoard,Y
+    LDX bowX
+    LDY bowY
+    JSR DrawWholeShip
+    JMP @updateSquareAttribute
 
 @storeTiles:
-    ; Write the tile data to the queues
-    STA NQUEUE0
+    ; Write the tile data to the queues.
+    ; Use queues 2 and 3 because that's what DrawWholeShip uses.
+    STA NQUEUE2
     CLC
     ADC #1
-    STA NQUEUE0 + 1
+    STA NQUEUE2 + 1
     ADC #CHAR_TILES_PER_ROW - 1
-    STA NQUEUE1
+    STA NQUEUE3
     ADC #1
-    STA NQUEUE1 + 1
+    STA NQUEUE3 + 1
     
     ; Terminators
     LDA #0
-    STA NQUEUE0 + 2
-    STA NQUEUE1 + 2
+    STA NQUEUE2 + 2
+    STA NQUEUE3 + 2
 
     ; Nametable pointers
     LDX cursorX
     LDY cursorY
     JSR GetSquareNametablePtrFromXY  ; preserves Y register
-    STA nametableQueueAddressHi      ; NQUEUE0
-    STX nametableQueueAddressLo
-    STA nametableQueueAddressHi + 1  ; NQUEUE1
+    STA nametableQueueAddressHi + 2      ; NQUEUE0
+    STX nametableQueueAddressLo + 2
+    STA nametableQueueAddressHi + 3  ; NQUEUE1
     TXA
     CLC
     ADC #NAMETABLE_TILES_PER_LINE
-    STA nametableQueueAddressLo + 1
+    STA nametableQueueAddressLo + 3
 
     ; Nametable write direction
     LDA ppuControl
     AND #%11111011
     ORA #NAMETABLE_QUEUE_STATUS_HORIZONTAL
-    STA nametableQueueStatus
-    STA nametableQueueStatus + 1
+    STA nametableQueueStatus + 2
+    STA nametableQueueStatus + 3
 
-    ; Update palette
+@updateSquareAttribute:
+    ; Use queue 0 since it's available.
     CLC
     LDX cursorX
     LDY cursorY
     LDA #PALETTE_HIT_OR_MISS
     JSR UpdateAttributeCacheForOneSquareXY
 
-    STY nametableQueueAddressHi + 2
-    STX nametableQueueAddressLo + 2
-    STA NQUEUE2  ; hopefully never 0
+    STY nametableQueueAddressHi
+    STX nametableQueueAddressLo
+    STA NQUEUE0  ; hopefully never 0
     LDA #0
-    STA NQUEUE2 + 1
+    STA NQUEUE0 + 1
 
 DrawCursor:
     LDX cursorX
@@ -2543,7 +2534,7 @@ StartPixelY:
 ; RETURNS:
 ;  * C - set if missile fired; clear if not (square already fired upon)
 ;  * Z - set if miss; clear if hit; check only if C set
-; ALTERS: A, Y
+; ALTERS: A, X, Y
 ;------------------------------------------------------------------------------
 FIRED_UPON_BIT_MASK = %01000000
     TAY
@@ -2570,16 +2561,183 @@ FireMissile:
     BIT isMainBoardPlayer
     BMI :+
     STA cpuBoard,Y
-    JMP End
+    JMP DecrementRemainingHits
 :
     STA playerBoard,Y
 
+DecrementRemainingHits:
+    TAY
+    JSR GetShipIdFromBoardByte
+    TAX
+
+    BIT isMainBoardPlayer
+    BMI :+
+    DEC cpuShipsRemainingHits,X
+    JMP End
+:
+    DEC playerShipsRemainingHits,X
+
 End:
     SEC
+    TYA
     AND #%10000000   ; set/clear Z flag
     RTS
 .endproc
 
+
+
+.proc DrawWholeShip
+; DESCRIPTION: Draw all parts of a ship. Uses NQUEUE2 and NQUEUE3.
+; PARAMETERS:
+;  * X - X coordinate of bow
+;  * Y - Y coordinate of bow
+;  * A - Byte containing the ship ID in d5-d3 and the orientation in d0.
+;        This is the same structure as a board square byte.
+; AFFECTS: X, Y
+;------------------------------------------------------------------------------
+
+; TODO: Allow choosing queues 0/1 or 2/3
+
+boardSquare      = $00
+shipNumTiles     = $01
+shipTilePtr      = $02 ; 2 bytes
+
+    PHA         ; Push the board square parameter to the stack. It can't be
+                ; written to the local variable yet because those memory
+                ; locations haven't been saved off yet.
+
+    LDA $00
+    PHA
+    LDA $01
+    PHA
+    LDA $02
+    PHA
+    LDA $03
+    PHA
+
+    TXA         ; Save the X coordinate
+    PHA
+
+    TSX
+    LDA STACK + 6,X  ; Retrieve the board square byte.
+    STA boardSquare
+
+    ; Set up the nametable pointers
+    ; The NQUEUE2 address is the same for both orientations.
+    ; NQUEUE3 and NQUEUE2 have the same hi byte.
+    ; NQUEUE3's lo byte is determine later since it's orientation-dependent.
+    PLA                             ; Restore the X-coordinate.
+    TAX
+    JSR GetSquareNametablePtrFromXY ; A and X hold the hi and lo pointers.
+    STA nametableQueueAddressHi + 2
+    STX nametableQueueAddressLo + 2
+    STA nametableQueueAddressHi + 3
+
+SetUpOrientationDependentVars:
+    ; Set up variable which depend on the ship's orientation.
+
+    LDA boardSquare
+    LSR ; move orientation to carry
+    BCS @vertical
+
+@horizontal:
+    ; Ship graphics pointer
+    LDA boardSquare
+    JSR GetShipIdFromBoardByte
+    TAY
+    LDA ShipTilesHorizontalLo,Y
+    STA shipTilePtr
+    LDA ShipTilesHorizontalHi,Y
+    STA shipTilePtr + 1
+
+    ; Nametable pointer
+    TXA
+    CLC
+    ADC #NAMETABLE_TILES_PER_LINE
+    STA nametableQueueAddressLo + 3
+    LDY #NAMETABLE_QUEUE_STATUS_HORIZONTAL
+    JMP SetNametableStatus
+
+@vertical:
+    ; Ship graphics pointer
+    LDA boardSquare
+    JSR GetShipIdFromBoardByte
+    TAY
+    LDA ShipTilesVerticalLo,Y
+    STA shipTilePtr
+    LDA ShipTilesVerticalHi,Y
+    STA shipTilePtr + 1
+    
+    ; Nametable pointer
+    INX
+    STX nametableQueueAddressLo + 3
+    LDY #NAMETABLE_QUEUE_STATUS_VERTICAL
+
+SetNametableStatus:
+    STY nametableQueueStatus + 2
+    LDA ppuControl
+    AND #%11111011
+    ORA nametableQueueStatus + 2
+    STA nametableQueueStatus + 2
+    STA nametableQueueStatus + 3
+
+InitTileQueueLoop:
+    ; Get the number of squares to loop over
+    LDA boardSquare
+    JSR GetShipIdFromBoardByte
+    TAY
+    LDA ShipLengths,Y
+    ASL                ; double to get length in tiles
+    STA shipNumTiles
+    LDY #0
+
+@nQueue2Loop:
+    ; The tile and queue indices are in sync for the NQUEUE2 loop, so we just
+    ; use Y for NQUEUE2.
+    LDA (shipTilePtr),Y
+    STA NQUEUE2,Y
+
+    INY
+    CPY shipNumTiles
+    BCC @nQueue2Loop
+
+    ; Write the terminator
+    LDA #0
+    STA NQUEUE2,Y
+
+    ; Double the end of the loop for the second half (bottom or right)
+    LDA shipNumTiles
+    ASL
+    STA shipNumTiles
+
+    LDX #0
+@nQueue3Loop:
+    LDA (shipTilePtr),Y
+    STA NQUEUE3,X
+
+    INX
+    INY
+    CPY shipNumTiles
+    BCC @nQueue3Loop
+
+    ; Write the terminator
+    LDA #0
+    STA NQUEUE3,X
+
+End:
+    PLA
+    STA $03
+    PLA
+    STA $02
+    PLA
+    STA $01
+    PLA
+    STA $00
+
+    PLA
+
+    RTS
+.endproc
 
 ;##############################################
 ; GAME LOGIC SUBROUTINES
@@ -2625,20 +2783,26 @@ OffsetLo:
 ; TODO: support both boards
     JSR GetBoardArrayIdFromXY
     TAY
-    JSR GetBoardSquareFromArrayId
+    JSR GetBoardSquareTileFromArrayId
     RTS
 .endproc
 
-.proc GetBoardSquareFromArrayId
+.proc GetBoardSquareTileFromArrayId
 ; DESCRIPTION: Get a char tile of a board from an array ID
 ; PARAMETERS:
 ;  * Y - array ID
 ; RETURNS:
 ;  * A - char tile of square at the array ID
-; TODO: support both boards
 ;-------------------------------------------------------------------------------
     ; Check if there is a ship (bit 7)
+    BIT isMainBoardPlayer
+    BMI :+
+    LDA cpuBoard,Y
+    JMP @checkForShip
+:
     LDA playerBoard,Y
+
+@checkForShip:
     TAX
     AND #%10000000
     BNE @getTile
@@ -2676,6 +2840,20 @@ OffsetY:
   .byte 0,10,20,30,40,50,60,70,80,90
 .endproc
 
+.proc GetShipIdFromBoardByte
+; DESCRIPTION: Isolate the ship ID part of a board byte.
+; PARAMETERS:
+;  * A - Board byte
+; RETURNS:
+;  * A - Ship ID
+;------------------------------------------------------------------------------
+    LSR
+    LSR
+    LSR
+    AND #%00000111
+    RTS
+.endproc
+
 .proc GetNextShipToPlace
 ; DESCRIPTION: Get the ID of the next unplaced ship.
 ; PARAMETERS:
@@ -2702,6 +2880,99 @@ Loop:
     LDY #$FF  ; all ships have been placed
 End:
     TYA
+    RTS
+.endproc
+
+.proc FindBowOfShip
+; DESCRIPTION: Given the (X,Y) coordinates of a part of a ship on a board, find
+;              the (X,Y) coordinates of the bow of the ship.
+; PARAMETERS:
+;  * X - Starting X-coordinate
+;  * Y - Starting Y-coordinate
+;  * C - set if player's board; clear if CPU's board
+; RETURNS:
+;  * X - X-coordinate of the bow of the ship or $FF if no ship
+;  * Y - Y-coordinate of the bow of the ship or $FF if no ship
+;------------------------------------------------------------------------------
+
+boardPtr = $00 ; 2 bytes
+currentX = $02
+currentY = $03
+
+    LDA $00
+    PHA
+    LDA $01
+    PHA
+    LDA $02
+    PHA
+    LDA $03
+    PHA
+
+    STX currentX
+    STY currentY
+
+    ; Set up the board pointer
+    BCS :+
+    LDA #<cpuBoard
+    STA boardPtr
+    LDA #>cpuBoard
+    STA boardPtr + 1
+    JMP InitLoop
+
+:
+    LDA #<playerBoard
+    STA boardPtr
+    LDA #>playerBoard
+    STA boardPtr + 1
+
+InitLoop:
+    LDX currentX
+    LDY currentY
+    JSR GetBoardArrayIdFromXY
+    TAY
+    LDA (boardPtr),Y
+
+    ; Quit if there's no ship
+    BMI @loop
+    LDA #$FF
+    STA currentX
+    STA currentY
+    BNE End
+
+@loop:
+    LDX currentX
+    LDY currentY
+    JSR GetBoardArrayIdFromXY
+    TAY
+    LDA (boardPtr),Y
+
+    LSR                  ; put orientation in carry
+    AND #%00000011       ; isolate ship section ($0 = bow)
+    BEQ End
+
+    ; Change X and Y to the next square closer to the bow.
+    ; The bow is always the minimum (X,Y) of the ship.
+    BCS :+
+    DEC currentX
+    BPL @loop    ; Will always branch
+
+:
+    DEC currentY
+    BPL @loop
+
+End:
+    LDX currentX
+    LDY currentY
+
+    PLA
+    STA $03
+    PLA
+    STA $02
+    PLA
+    STA $01
+    PLA
+    STA $00
+
     RTS
 .endproc
 
