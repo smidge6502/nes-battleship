@@ -100,6 +100,9 @@ FRAMESTATE_UPDATE_BOARD = 1 << 6 ; set if board nametable needs updating
 gameState:        .res 1
 nextGameState:    .res 1
 
+; Random number generator variables
+rng:              .res 1
+
 ; Controller state variables
 prevButtons1:     .res 1 ; buttons read the previous frame
 prevButtons2:     .res 1
@@ -268,6 +271,10 @@ ClearMem:
     LDA #GAMESTATE_TITLE
     STA gameState
     STA nextGameState
+
+    ; Set RNG seed
+    LDA #1
+    STA rng
 
 ; Enable interrupts
     ;CLI
@@ -558,6 +565,9 @@ End:
     LDA #ATTRIBUTE_QUEUE_TERMINATOR
     STA attributeQueue0
     STA attributeQueue1
+
+    ; Iterate RNG
+    JSR GetNextRng
 
     ; Read the joypads and disable the APU frame counter
     ; IRQ again since reading the second joypad re-enables it
@@ -2755,6 +2765,60 @@ End:
 ;##############################################
 ; GAME LOGIC SUBROUTINES
 ;##############################################
+
+.proc GetNextRng
+; DESCRIPTION: Get the next RNG value.
+;              The RNG is implemented as an 8-bit linear feedback shift
+;              register (LFSR) with maximal length. The shift bit is:
+;                  shift bit = d7 ^ d5 ^ d4 ^ d3 ^ d0
+; RETURNS:
+;  * A - New RNG value
+;------------------------------------------------------------------------------
+shiftedRng = $00
+nextBit    = $01  ; d7 holds the result of the XOR
+
+    LDA $00
+    PHA
+    LDA $01
+    PHA
+
+    LDA rng
+    STA shiftedRng
+
+    ; d7
+    STA nextBit        
+
+    ; d7 ^ d5
+    ASL
+    ASL
+    STA shiftedRng
+    EOR nextBit
+    STA nextBit
+
+    ; d7 ^ d5 ^ d4
+    LDA shiftedRng
+    ASL
+    STA shiftedRng
+    EOR nextBit
+    STA nextBit
+
+    ; d7 ^ d5 ^ d4 ^ d3
+    LDA shiftedRng
+    ASL
+    STA shiftedRng
+    EOR nextBit     ; final value of the XOR
+    ASL             ; shift next bit to carry
+    ROL rng
+
+End:
+    PLA
+    STA $01
+    PLA
+    STA $00
+
+    LDA rng
+    RTS
+.endproc
 
 .proc GetSquareNametablePtrFromXY
 ; DESCRIPTION: Given a board square's position at (X,Y),
