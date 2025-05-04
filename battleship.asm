@@ -758,8 +758,24 @@ CheckJoypad:
     AND #BUTTON_A
     BEQ @checkSelect
 
+    ; Call PlaceShipOnBoard
+    LDA $00
+    PHA
+    LDA $01
+    PHA
+    LDA shipOrientation
+    STA $00
+    LDA shipBeingPlaced
+    STA $01
+    LDX cursorX
+    LDY cursorY
+    SEC
     JSR PlaceShipOnBoard
-    BEQ @updateNextShip
+    PLA
+    STA $01
+    PLA
+    STA $00
+    BCS @updateNextShip
 
     JMP DrawBoard
 
@@ -1494,19 +1510,72 @@ attY = SetAttributeQueues::attY
 
 .proc PlaceShipOnBoard
 ; DESCRIPTION: Place a ship on the board
-; RETURNS: Z flag set if ship placed; cleared if it could not be placed
+; PARAMETERS:
+;  * X - X coordinate
+;  * Y - Y coordinate
+;  * C - set if player's board; clear if CPU's board
+;  * $00 - ship orientation
+;  * $01 - ship to place
+; RETURNS: C flag set if ship placed; cleared if it could not be placed
 ;------------------------------------------------------------------------------
-startArrayId   = $00
-currentArrayId = $01
-deltaArrayId   = $02 ; amount to add to get the next array ID
-shipByte       = $03
-    LDX cursorX
-    LDY cursorY
+orientation    = $00 ; input parameters
+shipType       = $01
+
+currentArrayId = $02
+deltaArrayId   = $03 ; amount to add to get the next array ID
+shipByte       = $04
+boardPtr       = $05 ; 2 bytes
+startArrayId   = $07 ; not used?
+isPlayerBoard  = $08
+boardX         = $09
+boardY         = $0A
+
+    LDA $02
+    PHA
+    LDA $03
+    PHA
+    LDA $04
+    PHA
+    LDA $05
+    PHA
+    LDA $06
+    PHA
+    LDA $07
+    PHA
+    LDA $08
+    PHA
+    LDA $09
+    PHA
+    LDA $0A
+    PHA
+
+    STX boardX
+    STY boardY
+
+    ; Set up the board pointer
+    BCS :+
+    LDA #<cpuBoard
+    STA boardPtr
+    LDA #>cpuBoard
+    STA boardPtr + 1
+    LDA #0
+    STA isPlayerBoard
+    JMP InitArrayVars
+
+:
+    LDA #<playerBoard
+    STA boardPtr
+    LDA #>playerBoard
+    STA boardPtr + 1
+    LDA #1
+    STA isPlayerBoard
+
+InitArrayVars:
     JSR GetBoardArrayIdFromXY
     STA startArrayId
     STA currentArrayId
 
-    LDA shipOrientation
+    LDA orientation
     BNE :+
     LDA #1 ; horizontal
     STA deltaArrayId
@@ -1517,14 +1586,16 @@ shipByte       = $03
 
 CheckIfEmpty:
     ; Check if there is already a ship at (X,Y)
-    LDY shipBeingPlaced
+    LDY shipType
     LDX ShipLengths,Y
 @loop:
     LDY currentArrayId
-    LDA playerBoard,Y
+    LDA (boardPtr),Y
     AND #%10000000
     BEQ @iterate
-    RTS  ; Z flag is cleared for return value
+
+    CLC ; ship not placed
+    JMP End
 
 @iterate:
     LDA deltaArrayId
@@ -1540,11 +1611,11 @@ PlaceShip:
     ; common bits of the byte:
     ; d7 = 1 (has ship); d6 = 0 (not fired upon);
     ; d5-d3 = ship ID; d0 = orientation
-    LDA shipBeingPlaced
+    LDA shipType
     ASL
     ASL
     ASL
-    ORA shipOrientation
+    ORA orientation
     ORA #%10000000
     STA shipByte
 
@@ -1555,7 +1626,7 @@ PlaceShip:
     ; The ship part is already correctly set to 0.
     TAY
     LDA shipByte
-    STA playerBoard,Y
+    STA (boardPtr),Y
 
     TYA
     CLC
@@ -1563,7 +1634,7 @@ PlaceShip:
     STA currentArrayId
 
     ; Place middle
-    LDY shipBeingPlaced
+    LDY shipType
     LDX ShipLengths,Y
     DEX
     DEX ; subtract 2 for middle length
@@ -1573,7 +1644,7 @@ PlaceShip:
     ORA #%00000010 ; middle section
 @middeLoop:
     LDY currentArrayId
-    STA playerBoard,Y
+    STA (boardPtr),Y
     PHA
     TYA
     CLC
@@ -1587,16 +1658,39 @@ PlaceShip:
     LDA shipByte
     ORA #%00000100 ; stern
     LDY currentArrayId
-    STA playerBoard,Y
+    STA (boardPtr),Y
 
 MarkShipAsPlaced:
-    LDY shipBeingPlaced
-    LDA cursorX
-    STA placedShipsX,Y
-    LDA cursorY
-    STA placedShipsY,Y
+    LDA isPlayerBoard ; skip this for the CPU's board
+    BEQ End
 
-    LDA #0 ; Set Z flag to indicate the ship was placed
+    LDY shipType
+    LDA boardX
+    STA placedShipsX,Y
+    LDA boardY
+    STA placedShipsY,Y
+    SEC   ; ship was placed
+
+End:
+    PLA
+    STA $0A
+    PLA
+    STA $09
+    PLA
+    STA $08
+    PLA
+    STA $07
+    PLA
+    STA $06
+    PLA
+    STA $05
+    PLA
+    STA $04
+    PLA
+    STA $03
+    PLA
+    STA $02
+
     RTS
 
 .endproc
