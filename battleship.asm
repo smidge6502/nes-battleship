@@ -758,7 +758,7 @@ CheckJoypad:
     AND #BUTTON_A
     BEQ @checkSelect
 
-    ; Call PlaceShipOnBoard
+    ; Call PlaceShipOnBoard for the player
     LDA $00
     PHA
     LDA $01
@@ -775,6 +775,9 @@ CheckJoypad:
     STA $01
     PLA
     STA $00
+
+    JSR PlaceShipOnCpuBoard
+
     BCS @updateNextShip
 
     JMP DrawBoard
@@ -1660,6 +1663,8 @@ PlaceShip:
     LDY currentArrayId
     STA (boardPtr),Y
 
+    SEC   ; ship was placed
+
 MarkShipAsPlaced:
     LDA isPlayerBoard ; skip this for the CPU's board
     BEQ End
@@ -1669,7 +1674,6 @@ MarkShipAsPlaced:
     STA placedShipsX,Y
     LDA boardY
     STA placedShipsY,Y
-    SEC   ; ship was placed
 
 End:
     PLA
@@ -1693,6 +1697,95 @@ End:
 
     RTS
 
+.endproc
+
+.proc PlaceShipOnCpuBoard
+; DESCRIPTION: Place a ship on the CPU's board.
+;              This is meant to be called at the same time the player places
+;              a ship on the board. It will place the same type of ship but
+;              at a random location and orientation.
+; ALTERS: A
+;------------------------------------------------------------------------------
+
+; We need to use RNG to get three values: the X position, the Y position, and
+; the orientation. For this we'll use two random numbers:
+;   * Random num 1: YYYY XXXX - Y position in hi nibble, X in lo.
+;                               Both values must be between 0 and 9 inclusive.
+;   * Random num 2: xxxx xxxO - Orientation in d0.
+;
+; If the ship cannot be placed with the chosen orientation, the other will be
+; tried. If neither works, then new coordinates will be chosen.
+orientation = $00         ; Important: orientation and shipType line up with
+shipType    = $01         ; the same args for PlaceShipOnBoard
+positionX   = $02
+positionY   = $03
+
+    LDA $00
+    PHA
+    LDA $01
+    PHA
+    LDA $02
+    PHA
+    LDA $03
+    PHA
+
+    LDA shipBeingPlaced
+    STA shipType
+
+RngLoop:
+    JSR GetNextRng        ; Value for coordinates
+    CMP #$9A              ; Quick check - must be <= $99
+    BCS RngLoop
+
+    TAY                   ; X-coordinate
+    AND #$0F
+    CMP #$0A
+    BCS RngLoop
+
+    STA positionX
+
+    TYA                   ; Y-coordinate
+    LSR
+    LSR
+    LSR
+    LSR
+    CMP #$0A
+    BCS RngLoop
+
+    STA positionY
+
+    JSR GetNextRng        ; Get the value to use for the orientation
+    AND #$01
+    STA orientation
+
+    LDX positionX         ; First attempt to place with at this position
+    LDY positionY
+    CLC
+    JSR PlaceShipOnBoard
+    BCS End
+
+    LDA orientation       ; Try again with the other orientation
+    EOR #$01
+    STA orientation
+    LDX positionX
+    LDY positionY
+    CLC
+    JSR PlaceShipOnBoard
+    BCS End
+
+    JMP RngLoop           ; Oh well. Start from the beginning.
+
+End:
+    PLA
+    STA $03
+    PLA
+    STA $02
+    PLA
+    STA $01
+    PLA
+    STA $00
+
+    RTS
 .endproc
 
 .proc ProcessPlayBoard
