@@ -1532,6 +1532,7 @@ startArrayId   = $07 ; not used?
 isPlayerBoard  = $08
 boardX         = $09
 boardY         = $0A
+maxArrayId     = $0B
 
     LDA $02
     PHA
@@ -1550,6 +1551,8 @@ boardY         = $0A
     LDA $09
     PHA
     LDA $0A
+    PHA
+    LDA $0B
     PHA
 
     STX boardX
@@ -1579,20 +1582,45 @@ InitArrayVars:
     STA currentArrayId
 
     LDA orientation
-    BNE :+
-    LDA #1 ; horizontal
-    STA deltaArrayId
-    BNE CheckIfEmpty
-:
-    LDA #10
+    BNE @initVertical
+
+@initHorizontal:
+    LDA #1
     STA deltaArrayId
 
-CheckIfEmpty:
-    ; Check if there is already a ship at (X,Y)
+    ; Find the last array ID in the row.
+    LDA #BOARD_NUM_COLS
+@horizontalMaxLoop:
+    STA maxArrayId
+    LDA currentArrayId
+    CMP maxArrayId
+    BCC CheckIfShipCanFit
+
+    LDA #BOARD_NUM_COLS
+    CLC
+    ADC maxArrayId
+    JMP @horizontalMaxLoop
+
+    ;BNE CheckIfEmpty
+
+@initVertical:
+    LDA #10
+    STA deltaArrayId
+    LDA #BOARD_NUM_SQUARES  ; Works for all columns
+    STA maxArrayId
+
+CheckIfShipCanFit:
+    ; Check that the ship would only occupy empty squares within bounds.
     LDY shipType
     LDX ShipLengths,Y
 @loop:
     LDY currentArrayId
+    CPY maxArrayId
+    BCC :+
+    CLC ; ship not placed
+    JMP End
+
+:
     LDA (boardPtr),Y
     AND #%10000000
     BEQ @iterate
@@ -1676,6 +1704,8 @@ MarkShipAsPlaced:
     STA placedShipsY,Y
 
 End:
+    PLA
+    STA $0B
     PLA
     STA $0A
     PLA
@@ -1852,20 +1882,20 @@ Init:
     STA newCursorY
     STA isMainBoardPlayer
 
-@copyPlayerBoardToCpuBoard:
-    ; TODO - Remove this section.
-    ; This copies the player's board to the CPU's board. Its purpose is to
-    ; put something on the CPU board before that is properly implemented.
-    LDY #BOARD_NUM_SQUARES - 1
-:
-    LDA playerBoard,Y
-    AND #%10111111 ; clear "has missile" flag
-    STA cpuBoard,Y
-    DEY
-    BPL :-
+; @copyPlayerBoardToCpuBoard:
+;     ; TODO - Remove this section.
+;     ; This copies the player's board to the CPU's board. Its purpose is to
+;     ; put something on the CPU board before that is properly implemented.
+;     LDY #BOARD_NUM_SQUARES - 1
+; :
+;     LDA playerBoard,Y
+;     AND #%10111111 ; clear "has missile" flag
+;     STA cpuBoard,Y
+;     DEY
+;     BPL :-
     JMP DrawCursor
 
-    JMP End ; skip button checks
+    ;JMP End ; skip button checks
 InitEnd:
 
     JSR DrawMiniMapOverlay
